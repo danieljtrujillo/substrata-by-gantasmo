@@ -1,0 +1,257 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+    --font-heading: var(--font-sans);
+    --font-sans: 'Geist Variable', 'Helvetica Neue', Arial, sans-serif;
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+
+    /* Frosted Glass Theme Specifics */
+    --color-glass: rgba(255, 255, 255, 0.08);
+    --color-glass-border: rgba(255, 255, 255, 0.12);
+    --color-laser-accent: #00f2ff;
+}
+
+:root {
+    --background: #0d0d15;
+    --foreground: #ffffff;
+    --card: rgba(255, 255, 255, 0.05);
+    --card-foreground: #ffffff;
+    --popover: rgba(0, 0, 0, 0.8);
+    --popover-foreground: #ffffff;
+    --primary: #00f2ff;
+    --primary-foreground: #000000;
+    --secondary: rgba(255, 255, 255, 0.1);
+    --secondary-foreground: #ffffff;
+    --muted: rgba(255, 255, 255, 0.05);
+    --muted-foreground: rgba(255, 255, 255, 0.6);
+    --accent: rgba(255, 255, 255, 0.1);
+    --accent-foreground: #00f2ff;
+    --destructive: #ff4444;
+    --border: rgba(255, 255, 255, 0.12);
+    --input: rgba(0, 0, 0, 0.3);
+    --ring: #00f2ff;
+    --radius: 12px;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    background-image: 
+        radial-gradient(at 0% 0%, #1a1a2e 0%, transparent 50%),
+        radial-gradient(at 100% 0%, #16213e 0%, transparent 50%),
+        radial-gradient(at 100% 100%, #0f3460 0%, transparent 50%),
+        radial-gradient(at 0% 100%, #533483 0%, transparent 50%);
+    background-attachment: fixed;
+    min-height: 100vh;
+  }
+}
+
+@layer components {
+    .glass-panel {
+        @apply bg-white/5 backdrop-blur-[15px] border border-white/10 rounded-[20px] shadow-2xl;
+    }
+    
+    .glass-input {
+        @apply bg-black/30 border border-white/10 rounded-xl px-4 py-2 text-white focus:border-laser-accent focus:ring-1 focus:ring-laser-accent outline-none transition-all;
+    }
+
+    .accent-btn {
+        @apply bg-laser-accent text-black font-bold uppercase tracking-widest hover:brightness-110 active:scale-[0.98] transition-all;
+    }
+
+    /* Custom scrollbar for glass look */
+    ::-webkit-scrollbar {
+        width: 6px;
+    }
+    ::-webkit-scrollbar-track {
+        background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 10px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 255, 255, 0.2);
+    }
+
+    /* Documentation viewer styles */
+    .doc-content .doc-h1 {
+        color: #00f2ff;
+        font-size: 1.6rem;
+        font-weight: 700;
+        margin: 1.8rem 0 0.8rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        letter-spacing: -0.01em;
+    }
+    .doc-content .doc-h2 {
+        color: #00f2ff;
+        font-size: 1.15rem;
+        font-weight: 700;
+        margin: 1.5rem 0 0.6rem;
+    }
+    .doc-content .doc-h3 {
+        color: #ffffff;
+        font-size: 0.95rem;
+        font-weight: 600;
+        margin: 1.2rem 0 0.5rem;
+    }
+    .doc-content .doc-p {
+        color: rgba(255, 255, 255, 0.75);
+        font-size: 0.85rem;
+        line-height: 1.7;
+        margin-bottom: 0.6rem;
+    }
+    .doc-content .doc-inline-code {
+        background: rgba(0, 242, 255, 0.1);
+        color: #00f2ff;
+        padding: 0.1em 0.4em;
+        border-radius: 4px;
+        font-size: 0.82rem;
+        font-family: 'Geist Mono', 'Fira Code', monospace;
+    }
+    .doc-content .doc-code-block {
+        background: rgba(0, 0, 0, 0.5);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 10px;
+        padding: 1rem;
+        overflow-x: auto;
+        margin: 0.8rem 0;
+        font-size: 0.78rem;
+        line-height: 1.6;
+    }
+    .doc-content .doc-code-block code {
+        background: none;
+        color: rgba(255, 255, 255, 0.7);
+        padding: 0;
+        font-family: 'Geist Mono', 'Fira Code', monospace;
+    }
+    .doc-content .doc-table-wrap {
+        overflow-x: auto;
+        margin: 0.8rem 0;
+        border-radius: 10px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .doc-content .doc-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.8rem;
+    }
+    .doc-content .doc-table td {
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        padding: 0.45rem 0.7rem;
+        color: rgba(255, 255, 255, 0.7);
+    }
+    .doc-content .doc-table tr:first-child td {
+        background: rgba(0, 242, 255, 0.06);
+        color: #00f2ff;
+        font-weight: 600;
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+    .doc-content .doc-list {
+        padding-left: 1.5rem;
+        margin: 0.5rem 0;
+    }
+    .doc-content .doc-list li {
+        color: rgba(255, 255, 255, 0.7);
+        font-size: 0.85rem;
+        margin-bottom: 0.25rem;
+        line-height: 1.6;
+    }
+    .doc-content .doc-hr {
+        border: none;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+        margin: 1.5rem 0;
+    }
+    .doc-content strong {
+        color: #ffffff;
+    }
+    .doc-content .doc-mermaid-container {
+        margin: 1.5rem 0;
+        background: rgba(0, 0, 0, 0.35);
+        border: 1px solid rgba(0, 242, 255, 0.15);
+        border-radius: 12px;
+        padding: 1.5rem;
+        overflow-x: auto;
+    }
+    .doc-content .doc-mermaid-rendered {
+        display: flex;
+        justify-content: center;
+        margin: 1.5rem 0;
+        background: rgba(0, 0, 0, 0.35);
+        border: 1px solid rgba(0, 242, 255, 0.15);
+        border-radius: 12px;
+        padding: 1.5rem;
+        overflow-x: auto;
+    }
+    .doc-content .doc-mermaid-rendered svg {
+        max-width: 100%;
+        height: auto;
+    }
+    .doc-content .doc-image-container {
+        margin: 1.5rem 0;
+        text-align: center;
+    }
+    .doc-content .doc-image {
+        max-width: 100%;
+        border-radius: 10px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+    }
+    .doc-content .doc-image-caption {
+        font-size: 0.78rem;
+        color: rgba(255, 255, 255, 0.4);
+        margin-top: 0.5rem;
+        font-style: italic;
+    }
+    .doc-content em {
+        color: rgba(255, 255, 255, 0.85);
+    }
+}

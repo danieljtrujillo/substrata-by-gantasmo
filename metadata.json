@@ -1,0 +1,6 @@
+{
+  "name": "SUBSTRATA by GANTASMO",
+  "description": "Premium industrial design & laser precision suite. Advanced image synthesis, inpainting, and vector preparation for professional manufacturing.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": []
+}
