@@ -29,11 +29,11 @@ The **persistent AI Design Advisor** sits in the corner of every screen, ready t
 
 | Prototyping Studio | Design Studio | AI Advisor |
 |---|---|---|
-| ![3D Prototyping](docs/screenshots/01-prototyping-studio.png) | ![Design Studio](docs/screenshots/02-laser-studio.png) | ![Advisor](docs/screenshots/03-advisor-tab.png) |
+| ![3D Prototyping](public/docs/screenshots/01-prototyping-studio.png) | ![Design Studio](public/docs/screenshots/02-laser-studio.png) | ![Advisor](public/docs/screenshots/03-advisor-tab.png) |
 
 | Maintenance Dashboard | Project Library |
 |---|---|
-| ![Maintenance](docs/screenshots/04-maintenance-tab.png) | ![Library](docs/screenshots/05-library-tab.png) |
+| ![Maintenance](public/docs/screenshots/04-maintenance-tab.png) | ![Library](public/docs/screenshots/05-library-tab.png) |
 
 ---
 
