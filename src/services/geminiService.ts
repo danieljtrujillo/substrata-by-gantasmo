@@ -1,7 +1,7 @@
 import { GoogleGenAI, ThinkingLevel, Type, FunctionDeclaration } from "@google/genai";
 import { getComponentDatabaseSummary, getTemplateSummary, DESIGN_PRACTICES, COMMUNITY_SOURCES } from '../designDatabase';
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
 
 const SAVE_PRESET_TOOL: FunctionDeclaration = {
   name: "save_material_preset",
