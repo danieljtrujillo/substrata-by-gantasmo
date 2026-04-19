@@ -133,14 +133,14 @@ export default function App() {
   const [isLoadingProjects, setIsLoadingProjects] = useState(false);
 
   useEffect(() => {
-    if (!auth) return;
+    if (!auth) {
+      // No Firebase — load local projects
+      fetchProjects();
+      return;
+    }
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
-      if (currentUser) {
-        fetchProjects();
-      } else {
-        setSavedProjects([]);
-      }
+      fetchProjects();
     });
     return () => unsubscribe();
   }, []);

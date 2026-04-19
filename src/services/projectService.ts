@@ -10,7 +10,7 @@ import {
   deleteDoc,
   getDocFromServer
 } from 'firebase/firestore';
-import { db, auth } from '../lib/firebase';
+import { db, auth, FIREBASE_AVAILABLE } from '../lib/firebase';
 import { LaserSettings } from '../constants';
 import { ImageProcessOptions } from '../lib/imageProcessor';
 
@@ -26,6 +26,23 @@ export interface LaserProject {
   updatedAt: any;
 }
 
+// ── localStorage fallback ────────────────────────────────────
+const LOCAL_STORAGE_KEY = 'substrata_projects';
+
+const getLocalProjects = (): LaserProject[] => {
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+};
+
+const setLocalProjects = (projects: LaserProject[]) => {
+  localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(projects));
+};
+
+const useFirestore = () => FIREBASE_AVAILABLE && !!auth?.currentUser && !!db;
+
+// ── Error handling ───────────────────────────────────────────
 const handleFirestoreError = (error: any, operation: string, path: string | null = null) => {
   const user = auth?.currentUser;
   const errorInfo = {
@@ -49,12 +66,26 @@ const handleFirestoreError = (error: any, operation: string, path: string | null
 };
 
 export const saveProject = async (project: Omit<LaserProject, 'userId' | 'createdAt' | 'updatedAt'>) => {
-  const user = auth?.currentUser;
-  if (!user || !db) throw new Error("User must be logged in to save projects");
+  if (!useFirestore()) {
+    // localStorage fallback
+    const projects = getLocalProjects();
+    const now = new Date().toISOString();
+    const idx = projects.findIndex(p => p.id === project.id);
+    const full: LaserProject = { ...project, userId: 'local', createdAt: now, updatedAt: now };
+    if (idx >= 0) {
+      full.createdAt = projects[idx].createdAt;
+      projects[idx] = full;
+    } else {
+      projects.unshift(full);
+    }
+    setLocalProjects(projects);
+    return;
+  }
 
+  const user = auth!.currentUser!;
   const projectPath = `users/${user.uid}/projects/${project.id}`;
   try {
-    const projectRef = doc(db, projectPath);
+    const projectRef = doc(db!, projectPath);
     const existing = await getDoc(projectRef);
     
     if (existing.exists()) {
@@ -76,12 +107,14 @@ export const saveProject = async (project: Omit<LaserProject, 'userId' | 'create
 };
 
 export const getProjects = async (): Promise<LaserProject[]> => {
-  const user = auth?.currentUser;
-  if (!user || !db) return [];
+  if (!useFirestore()) {
+    return getLocalProjects();
+  }
 
+  const user = auth!.currentUser!;
   const projectsPath = `users/${user.uid}/projects`;
   try {
-    const q = query(collection(db, projectsPath), orderBy('updatedAt', 'desc'));
+    const q = query(collection(db!, projectsPath), orderBy('updatedAt', 'desc'));
     const snapshot = await getDocs(q);
     return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as LaserProject));
   } catch (error) {
@@ -91,12 +124,21 @@ export const getProjects = async (): Promise<LaserProject[]> => {
 };
 
 export const renameProject = async (projectId: string, newName: string) => {
-  const user = auth?.currentUser;
-  if (!user || !db) return;
+  if (!useFirestore()) {
+    const projects = getLocalProjects();
+    const proj = projects.find(p => p.id === projectId);
+    if (proj) {
+      proj.name = newName;
+      proj.updatedAt = new Date().toISOString();
+      setLocalProjects(projects);
+    }
+    return;
+  }
 
+  const user = auth!.currentUser!;
   const projectPath = `users/${user.uid}/projects/${projectId}`;
   try {
-    const projectRef = doc(db, projectPath);
+    const projectRef = doc(db!, projectPath);
     await setDoc(projectRef, {
       name: newName,
       updatedAt: serverTimestamp()
@@ -107,12 +149,16 @@ export const renameProject = async (projectId: string, newName: string) => {
 };
 
 export const deleteProject = async (projectId: string) => {
-  const user = auth?.currentUser;
-  if (!user || !db) return;
+  if (!useFirestore()) {
+    const projects = getLocalProjects().filter(p => p.id !== projectId);
+    setLocalProjects(projects);
+    return;
+  }
 
+  const user = auth!.currentUser!;
   const projectPath = `users/${user.uid}/projects/${projectId}`;
   try {
-    await deleteDoc(doc(db, projectPath));
+    await deleteDoc(doc(db!, projectPath));
   } catch (error) {
     handleFirestoreError(error, 'delete', projectPath);
   }
