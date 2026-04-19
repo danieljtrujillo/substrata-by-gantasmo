@@ -61,7 +61,7 @@ SUBSTRATA structures every project as a pipeline with these stages:
 
 ## Features
 
-### 🧊 3D Prototyping Studio
+### 3D Prototyping Studio
 - Describe any hardware project and Gemini Pro generates a complete blueprint with design files, BOM, assembly instructions, and control code
 - Parametric OpenSCAD 3D part definitions: `.scad` files you can render, modify, and print
 - SVG laser-cut layouts with vector paths for flat parts, mounting plates, and structural members, ready for LaserGRBL/LightBurn
@@ -73,25 +73,25 @@ SUBSTRATA structures every project as a pipeline with these stages:
 - 30+ real components (servos, MCUs, sensors, LEDs, power supplies) with specs and prices injected into AI context
 - 12 project archetypes (hexapod, quadruped, robotic arm, wheeled rover, LED doorknob, weather station, macro keypad, kinetic sculpture, voronoi lamp, gear clock, drone frame, plant monitor) with subsystem breakdowns
 
-### 🎨 Design Studio
+### Design Studio
 - Text and voice prompts via Gemini Flash Image with 4 design styles (minimalist, deconstructivist, classical, organic)
 - Image processing pipeline: grayscale conversion, Floyd-Steinberg dithering, Sobel edge detection, brightness/contrast/threshold
 - Pre-built design templates across categories
 - Canvas transforms: rotate (90° increments), flip horizontal/vertical
 - Export to PNG raster and SVG vector formats
 
-### 🖌️ Advanced Editor (Design Synth)
+### Advanced Editor (Design Synth)
 - Konva canvas with selection, box draw, eraser brush, and text overlay tools
 - AI inpainting fills masked regions with generated content
 - AI outpainting extends images beyond their boundaries
 - Style transfer restyles entire images with a text prompt
 
-### 🔧 Laser Fabrication
+### Laser Fabrication
 - 9 pre-configured material profiles (Kraft paper, Plywood, Wood, Bamboo, Cork, Leather, Silica gel, Felt, Tin plate)
 - Power/speed/passes control fine-tuned for the ACMER S1 diode laser
 - SVG vector output for LaserGRBL and LightBurn
 
-### 🏷️ Label Studio (NEW)
+### Label Studio
 - Design labels, stickers, and decals for your builds and ship them on a thermal printer
 - **Munbyn ITPP130B** thermal label printer integration (203 DPI, 108mm max width, USB, direct thermal)
 - 8 label size presets: 4×6" Shipping, 4×3" Product, 2.25×1.25" Address, 2×2" Square, 3×2" Barcode, 2.25×0.75" Slim, 2" Circle, 3" Circle
@@ -104,7 +104,7 @@ SUBSTRATA structures every project as a pipeline with these stages:
 - Quick-start templates: Product QR, Serial Number, Warning Decal, Logo Sticker, Address Label, Parts Tag
 - Batch printing support (1–50 copies per run)
 
-### 🤖 AI Design Advisor (Persistent)
+### AI Design Advisor (Persistent)
 - Floating panel in the bottom-right corner of every screen, accessible from any view
 - Breaks your idea into subsystems, identifies components, and suggests fabrication methods
 - References 30+ real components (SG90 servos, ESP32, Arduino Nano, MPU6050, WS2812B LEDs, etc.) with specs and prices
@@ -116,7 +116,7 @@ SUBSTRATA structures every project as a pipeline with these stages:
 - Can save material presets and trigger blueprint generation directly from conversation
 - Google Search grounding for real-time information retrieval
 
-### 🌐 Community Inspiration and Reference Databases
+### Community Inspiration and Reference Databases
 - GitHub: open-source hardware projects, reference designs, and firmware
 - Thingiverse: 3D-printable models and remixable designs
 - Instructables: step-by-step project guides and build tutorials
@@ -125,17 +125,17 @@ SUBSTRATA structures every project as a pipeline with these stages:
 - Adafruit Learn: electronics tutorials and component guides
 - Community sources are automatically referenced in AI advisor and blueprint generation prompts
 
-### 🔒 Machine Maintenance
+### Machine Maintenance
 - Safety status monitoring (goggles, exhaust)
 - Lens cleanliness tracking and maintenance scheduling
 - Operational statistics and troubleshooting guides
 
-### 📁 Project Library
+### Project Library
 - Google Auth with cloud storage via Cloudflare D1
 - Save/Load/Rename/Duplicate/Share/Delete projects
 - Curated stock templates across categories
 
-### 📖 In-App Documentation
+### In-App Documentation
 - Searchable documentation accessible from the **Docs** tab
 - Design guides, best practices, and material reference tables
 - Export as HTML or PDF
@@ -178,6 +178,92 @@ SUBSTRATA structures every project as a pipeline with these stages:
     │  Instructables · Hackaday│
     │  GrabCAD · Adafruit Learn│
     └─────────────────────────┘
+```
+
+### System Architecture
+
+```mermaid
+graph TB
+    subgraph Browser["Browser Client · React 19 + TypeScript"]
+        direction TB
+        App["App.tsx"]
+        App --> PS["3D Prototyping Studio"]
+        App --> LS["Laser Design Studio"]
+        App --> LB["Label Studio"]
+        App --> AE["Advanced Editor · Konva"]
+        App --> AI["AI Design Advisor · Persistent"]
+        subgraph Services["Service Layer"]
+            GS["geminiService"]
+            TTS["ttsService"]
+            ProjS["projectService"]
+        end
+        subgraph Libs["Library Layer"]
+            IP["imageProcessor"]
+            Auth["auth"]
+            Const["constants"]
+        end
+        App --> Services
+        App --> Libs
+    end
+    subgraph External["External Services"]
+        Gemini["Google Gemini API"]
+        CF["Cloudflare Pages + D1"]
+        THREE["Three.js"]
+    end
+    Services --> Gemini
+    Services --> CF
+    PS --> THREE
+```
+
+### Data Flow
+
+```mermaid
+graph LR
+    subgraph Input
+        Voice["Voice Prompt"]
+        Text["Text Prompt"]
+        Image["Image Upload"]
+    end
+    subgraph Processing["AI Processing"]
+        Transcribe["Transcribe · Flash"]
+        Generate["Generate Design · Flash Image"]
+        Blueprint["Generate Blueprint · Pro"]
+        Analyze["Material Analysis · Pro"]
+    end
+    subgraph Output
+        SCAD["OpenSCAD Parts"]
+        SVG["SVG Cut Files"]
+        WIRE["Wiring Diagrams"]
+        BOM["Bill of Materials"]
+        LABEL["Print-Ready Label"]
+        CUT["Silhouette SVG"]
+        GCODE["Laser G-Code"]
+    end
+    Voice --> Transcribe --> Text
+    Text --> Generate
+    Text --> Blueprint
+    Image --> Analyze
+    Generate --> SVG
+    Generate --> LABEL
+    Blueprint --> SCAD
+    Blueprint --> SVG
+    Blueprint --> WIRE
+    Blueprint --> BOM
+    LABEL --> CUT
+    Analyze --> GCODE
+```
+
+### Label Silhouette Pipeline
+
+```mermaid
+graph TD
+    A["Design Input · Upload or AI Generate"] --> B["Edge Detection · Sobel"] 
+    B --> C["Binary Mask + Boundary Extraction"]
+    C --> D["Point Ordering · Angular Sort"]
+    D --> E["Path Simplification"]
+    E --> F["SVG Generation · Offset Cut Line"]
+    F --> G1["Export Print-Ready PNG"]
+    F --> G2["Export Cut SVG for Laser"]
 ```
 
 ### Technology Stack
