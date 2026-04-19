@@ -8,7 +8,7 @@
     "dev:full": "npx wrangler pages dev --d1=DB -- npx vite --port=3000 --host=0.0.0.0",
     "build": "vite build",
     "preview": "npx wrangler pages dev dist --d1=DB",
-    "db:migrate": "npx wrangler d1 execute substrata-db --file=schema.sql",
+    "db:migrate": "npx wrangler d1 execute substrata-db --remote --file=schema.sql",
     "db:migrate:local": "npx wrangler d1 execute substrata-db --local --file=schema.sql",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit"

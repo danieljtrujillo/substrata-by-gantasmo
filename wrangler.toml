@@ -1,8 +1,9 @@
 # wrangler.toml — Cloudflare Pages configuration
 name = "substrata"
 compatibility_date = "2024-12-01"
+pages_build_output_dir = "dist"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "substrata-db"
-database_id = "" # Run: npx wrangler d1 create substrata-db — then paste the ID here
+database_id = "1e123d1e-778f-4ad0-906a-22a63c80e165"

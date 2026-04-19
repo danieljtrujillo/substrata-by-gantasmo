@@ -28,7 +28,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: d1 execute substrata-db --file=schema.sql
+          command: d1 execute substrata-db --remote --file=schema.sql
 
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
