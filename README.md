@@ -21,11 +21,11 @@
 
 ## Overview
 
-SUBSTRATA is the full-stack prototyping war room you build when you're sick of duct-taping twelve browser tabs together. AI image generation, parametric 3D modeling, laser G-code pipelines, real-time material analysis, wiring diagrams, firmware scaffolding — all wired into one dark-mode glassmorphism cockpit that runs on caffeine and Gemini 3.1.
+SUBSTRATA is the full-stack prototyping war room you build when you're sick of duct-taping twelve browser tabs together. AI image generation, parametric 3D modeling, laser G-code pipelines, real-time material analysis, wiring diagrams, and firmware scaffolding all live in one dark-mode glassmorphism cockpit that runs on caffeine and Gemini 3.1.
 
-Point it at a napkin sketch or scream "hexapod robot" into your mic. The AI advisor decomposes it into subsystems, pulls from a built-in database of 30+ real components and 12 battle-tested design templates, applies DFM rules for your printer and laser, and — when you say the word — generates actual OpenSCAD, SVG cut files, and pin-by-pin wiring in one shot. Then you hit print.
+Point it at a napkin sketch or scream "hexapod robot" into your mic. The AI advisor decomposes it into subsystems, pulls from a built-in database of 30+ real components and 12 battle-tested design templates, applies DFM rules for your printer and laser, and (when you give the word) generates OpenSCAD, SVG cut files, and pin-by-pin wiring in one shot. Then you hit print.
 
-The **persistent AI Design Advisor** lurks in the corner of every screen — part co-pilot, part enabler, part mad-scientist hype man. It knows your components, your constraints, and community projects across GitHub, Thingiverse, Hackaday, and Instructables. It doesn't just answer questions — it triggers builds.
+The **persistent AI Design Advisor** sits in the corner of every screen. Co-pilot, enabler, mad-scientist hype man. It knows your components, your constraints, and community projects across GitHub, Thingiverse, Hackaday, and Instructables. Give it an idea and it starts building.
 
 ### Screenshots
 
@@ -61,55 +61,55 @@ SUBSTRATA structures every project as a pipeline with these stages:
 ## Features
 
 ### 🧊 3D Prototyping Studio
-- **AI Blueprint Generation**: Describe any hardware project — Gemini Pro with deep thinking generates a complete blueprint with real design files, BOM, assembly instructions, and control code
-- **OpenSCAD Code Generation**: Parametric 3D part definitions — real `.scad` files you can render, modify, and print
-- **SVG Laser-Cut Layouts**: Vector paths for flat parts, mounting plates, structural members — ready for LaserGRBL/LightBurn
-- **Wiring Diagrams**: Pin-by-pin connection tables for microcontrollers, sensors, and actuators
-- **Assembly Steps**: Numbered step-by-step build instructions generated from the design
-- **Interactive 3D Viewer**: Three.js viewport with orbit controls, multi-light staging
-- **Bill of Materials**: Auto-generated parts list with pricing from Amazon, McMaster-Carr, Pololu, Adafruit, Grainger — sortable by price or shipping speed
-- **Design Notes & Community References**: AI-generated design rationale plus links to relevant open-source projects
-- **Component Database Injection**: 30+ real components (servos, MCUs, sensors, LEDs, power supplies) with specs and prices injected into AI context
-- **Template Library**: 12 project archetypes (hexapod, quadruped, robotic arm, wheeled rover, LED doorknob, weather station, macro keypad, kinetic sculpture, voronoi lamp, gear clock, drone frame, plant monitor) with subsystem breakdowns
+- Describe any hardware project and Gemini Pro generates a complete blueprint with design files, BOM, assembly instructions, and control code
+- Parametric OpenSCAD 3D part definitions: `.scad` files you can render, modify, and print
+- SVG laser-cut layouts with vector paths for flat parts, mounting plates, and structural members, ready for LaserGRBL/LightBurn
+- Pin-by-pin wiring diagrams for microcontrollers, sensors, and actuators
+- Numbered build instructions generated from the design
+- Three.js viewport with orbit controls and multi-light staging
+- Auto-generated parts list with pricing from Amazon, McMaster-Carr, Pololu, Adafruit, and Grainger, sortable by price or shipping speed
+- Design rationale and links to relevant open-source projects included with every blueprint
+- 30+ real components (servos, MCUs, sensors, LEDs, power supplies) with specs and prices injected into AI context
+- 12 project archetypes (hexapod, quadruped, robotic arm, wheeled rover, LED doorknob, weather station, macro keypad, kinetic sculpture, voronoi lamp, gear clock, drone frame, plant monitor) with subsystem breakdowns
 
 ### 🎨 Design Studio
-- **AI Design Generation**: Text and voice prompts via Gemini Flash Image — supports 4 design styles (minimalist, deconstructivist, classical, organic)
-- **Image Processing Pipeline**: Grayscale conversion, Floyd-Steinberg dithering, Sobel edge detection, brightness/contrast/threshold
-- **Template Library**: Pre-built design templates across categories
-- **Canvas Transforms**: Rotate (90° increments), flip horizontal/vertical
-- **Export**: PNG raster and SVG vector formats
+- Text and voice prompts via Gemini Flash Image with 4 design styles (minimalist, deconstructivist, classical, organic)
+- Image processing pipeline: grayscale conversion, Floyd-Steinberg dithering, Sobel edge detection, brightness/contrast/threshold
+- Pre-built design templates across categories
+- Canvas transforms: rotate (90° increments), flip horizontal/vertical
+- Export to PNG raster and SVG vector formats
 
 ### 🖌️ Advanced Editor (Design Synth)
-- **Konva Canvas**: Selection, box draw, eraser brush, text overlay tools
-- **AI Inpainting**: Fill masked regions with AI-generated content
-- **AI Outpainting**: Extend images beyond their boundaries
-- **Style Transfer**: Restyle entire images with a text prompt
+- Konva canvas with selection, box draw, eraser brush, and text overlay tools
+- AI inpainting fills masked regions with generated content
+- AI outpainting extends images beyond their boundaries
+- Style transfer restyles entire images with a text prompt
 
 ### 🔧 Laser Fabrication
-- **Smart Material Presets**: 9 pre-configured profiles (Kraft paper, Plywood, Wood, Bamboo, Cork, Leather, Silica gel, Felt, Tin plate)
-- **Power/Speed/Passes Control**: Fine-tuned parameters for the ACMER S1 diode laser
-- **LaserGRBL/LightBurn Export**: SVG vector output for CNC laser software
+- 9 pre-configured material profiles (Kraft paper, Plywood, Wood, Bamboo, Cork, Leather, Silica gel, Felt, Tin plate)
+- Power/speed/passes control fine-tuned for the ACMER S1 diode laser
+- SVG vector output for LaserGRBL and LightBurn
 
 ### 🤖 AI Design Advisor (Persistent)
-- **Always Available**: Floating panel in the bottom-right corner of every screen — never buried in a tab
-- **Design Decomposition**: Breaks your idea into subsystems, identifies key components, suggests fabrication methods
-- **Component Database**: References 30+ real components (SG90 servos, ESP32, Arduino Nano, MPU6050, WS2812B LEDs, etc.) with specs and prices
-- **Design Practices Library**: Built-in DFM rules for 3D printing, laser cutting, electronics layout, and mechanical design
-- **Blueprint Trigger**: When your idea is ready, the advisor calls `generate_blueprint` to auto-switch to the Prototyping Studio and kick off full generation
-- **"Build Blueprint from Discussion" Button**: Manual trigger to compile your conversation into a blueprint prompt
-- **Deep Thinking Mode**: Complex query analysis via Gemini Pro with high-level reasoning
-- **Voice I/O**: Voice prompts and TTS responses (5 voice options)
-- **Tool Use**: Can save material presets and trigger blueprint generation directly from conversation
-- **Google Search Grounding**: Real-time information retrieval
+- Floating panel in the bottom-right corner of every screen, accessible from any view
+- Breaks your idea into subsystems, identifies components, and suggests fabrication methods
+- References 30+ real components (SG90 servos, ESP32, Arduino Nano, MPU6050, WS2812B LEDs, etc.) with specs and prices
+- Built-in DFM rules for 3D printing, laser cutting, electronics layout, and mechanical design
+- When your idea is ready, the advisor calls `generate_blueprint` to switch to the Prototyping Studio and start generation
+- "Build Blueprint from Discussion" button compiles your conversation into a blueprint prompt
+- Deep thinking mode via Gemini Pro with high-level reasoning
+- Voice prompts and TTS responses (5 voice options)
+- Can save material presets and trigger blueprint generation directly from conversation
+- Google Search grounding for real-time information retrieval
 
-### 🌐 Community Inspiration & Reference Databases
-- **GitHub**: Search and browse open-source hardware projects, reference designs, and firmware
-- **Thingiverse**: Discover 3D-printable models and remixable designs
-- **Instructables**: Step-by-step project guides and build tutorials
-- **Hackaday**: Hardware hacking projects, teardowns, and engineering write-ups
-- **GrabCAD**: Professional CAD models and engineering references
-- **Adafruit Learn**: Electronics tutorials and component guides
-- **Auto-Injected Context**: Community sources are automatically referenced in AI advisor and blueprint generation prompts
+### 🌐 Community Inspiration and Reference Databases
+- GitHub: open-source hardware projects, reference designs, and firmware
+- Thingiverse: 3D-printable models and remixable designs
+- Instructables: step-by-step project guides and build tutorials
+- Hackaday: hardware hacking projects, teardowns, and engineering write-ups
+- GrabCAD: professional CAD models and engineering references
+- Adafruit Learn: electronics tutorials and component guides
+- Community sources are automatically referenced in AI advisor and blueprint generation prompts
 
 ### 🔒 Machine Maintenance
 - Safety status monitoring (goggles, exhaust)
@@ -170,16 +170,16 @@ SUBSTRATA structures every project as a pipeline with these stages:
 
 | Layer | Technology |
 |-------|-----------|
-| **Framework** | React 19 + TypeScript 5.8 |
-| **Build** | Vite 6.2 |
-| **Styling** | Tailwind CSS 4.1 (glassmorphism theme) |
-| **UI Components** | shadcn/ui (Radix + CVA) |
-| **3D Engine** | Three.js (React Three Fiber + Drei) |
-| **Canvas Editor** | Konva + react-konva |
-| **AI** | Google Gemini API (Pro, Flash, Flash Image, Flash TTS) |
-| **Auth & DB** | Firebase (Google Auth + Firestore) |
-| **Animation** | Motion (Framer Motion) |
-| **Icons** | Lucide React |
+| Framework | React 19 + TypeScript 5.8 |
+| Build | Vite 6.2 |
+| Styling | Tailwind CSS 4.1 (glassmorphism theme) |
+| UI Components | shadcn/ui (Radix + CVA) |
+| 3D Engine | Three.js (React Three Fiber + Drei) |
+| Canvas Editor | Konva + react-konva |
+| AI | Google Gemini API (Pro, Flash, Flash Image, Flash TTS) |
+| Auth and DB | Firebase (Google Auth + Firestore) |
+| Animation | Motion (Framer Motion) |
+| Icons | Lucide React |
 
 ### Key AI Models
 
@@ -272,12 +272,12 @@ src/
 
 ## Security
 
-- **Authentication**: Firebase Google Sign-In with email verification
-- **Data Isolation**: All data sandboxed under `/users/{uid}/`
-- **Firestore Rules**: Hardened with schema validation, immutability constraints, 1MB image limits
-- **Global Deny**: Catch-all rule blocks all access by default; specific paths whitelisted
-- **Security Testing**: 12 attack vectors ("Dirty Dozen") verified — see [security_spec.md](security_spec.md)
-- **API Keys**: Injected at build time via Vite, never committed to source
+- Firebase Google Sign-In authentication with email verification
+- All data sandboxed under `/users/{uid}/`
+- Firestore rules hardened with schema validation, immutability constraints, and 1MB image limits
+- Catch-all rule blocks all access by default; specific paths whitelisted
+- 12 attack vectors ("Dirty Dozen") verified, see [security_spec.md](security_spec.md)
+- API keys injected at build time via Vite, never committed to source
 
 ---
 
@@ -285,11 +285,11 @@ src/
 
 Full documentation is available in three ways:
 
-1. **In-App**: Click the **Docs** tab in the navigation bar
-2. **HTML Export**: From the Docs tab, click **HTML** to download an interactive offline reference
-3. **PDF Export**: From the Docs tab, click **PDF** to generate a print-ready document
+1. Click the **Docs** tab in the navigation bar for the in-app viewer
+2. From the Docs tab, click **HTML** to download an interactive offline reference
+3. From the Docs tab, click **PDF** to generate a print-ready document
 
-Documentation covers: Overview, Prototyping Pipeline, Design Guides & Best Practices, Feature Reference, API Reference, Community Sources, Security, and Setup.
+Documentation covers Overview, Prototyping Pipeline, Design Guides and Best Practices, Feature Reference, API Reference, Community Sources, Security, and Setup.
 
 ---
 

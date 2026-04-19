@@ -1,4 +1,4 @@
-# SUBSTRATA UI Overhaul — Blender-Style Unified Viewport
+# SUBSTRATA UI Overhaul: Blender-Style Unified Viewport
 
 ## Status: IN PROGRESS
 
@@ -84,7 +84,7 @@ One fullscreen viewport (like Blender) with panels that overlay/dock. Generation
 - `src/index.css` — Add viewport-lock styles, panel resize styles
 
 ## Architecture decisions
-- **Keep all tab content mounted** via CSS display:none instead of conditional rendering → preserves 3D canvas WebGL context and generation state
-- **Advisor merges design objectives** → single input point for the user
-- **Generation state lives in App** → survives any panel/tab switch
-- **Bottom output strip** uses horizontal scrollable tabs → no vertical page scroll
+- Keep all tab content mounted via CSS display:none instead of conditional rendering. This preserves 3D canvas WebGL context and generation state.
+- Advisor merges design objectives into a single input point for the user.
+- Generation state lives in App so it survives any panel/tab switch.
+- Bottom output strip uses horizontal scrollable tabs, no vertical page scroll.

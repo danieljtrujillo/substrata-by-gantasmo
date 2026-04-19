@@ -1,5 +1,5 @@
 /**
- * SUBSTRATA by GANTASMO — Documentation Content
+ * SUBSTRATA by GANTASMO: Documentation Content
  * This module contains all documentation sections rendered in the in-app docs viewer.
  * It is also used as the source for PDF/HTML export.
  */
@@ -20,7 +20,7 @@ export const DOCUMENTATION: DocSection[] = [
     content: `
 # SUBSTRATA by GANTASMO
 
-**SUBSTRATA** is an AI-powered rapid prototyping suite that takes your idea from concept to physical object. It combines design generation, 2D/3D modeling, image processing, fabrication planning, laser engraving, and cloud project management into one end-to-end pipeline.
+**SUBSTRATA** is an AI-powered rapid prototyping suite that covers the full path from concept to physical object. It combines design generation, 2D/3D modeling, image processing, fabrication planning, laser engraving, and cloud project management into one end-to-end pipeline.
 
 ## The Prototyping Pipeline
 
@@ -28,28 +28,28 @@ Every project in SUBSTRATA follows a pipeline:
 
 | Stage | What Happens | Tools Used |
 |-------|-------------|------------|
-| **Ideate** | Brainstorm concepts, browse community projects, describe your vision | AI Advisor, Community Sources (GitHub, Thingiverse, Instructables, Hackaday) |
-| **Design** | Generate 2D designs or 3D blueprints from text/voice prompts | Design Studio, Prototyping Studio, AI Image Generation |
-| **Process** | Refine images with filters, dithering, edge detection, canvas editing | Image Processor, Advanced Editor (inpaint, outpaint, style transfer) |
-| **Fabricate** | Generate STL files, BOMs, print parameters, and control code | 3D Prototyping Studio, Fabrication Files, BOM Generator |
-| **Finish** | Laser engrave, cut, or mark your finished parts | Laser Fabrication, Material Presets, PNG/SVG Export |
+| Ideate | Brainstorm concepts, browse community projects, describe your vision | AI Advisor, Community Sources (GitHub, Thingiverse, Instructables, Hackaday) |
+| Design | Generate 2D designs or 3D blueprints from text/voice prompts | Design Studio, Prototyping Studio, AI Image Generation |
+| Process | Refine images with filters, dithering, edge detection, canvas editing | Image Processor, Advanced Editor (inpaint, outpaint, style transfer) |
+| Fabricate | Generate STL files, BOMs, print parameters, and control code | 3D Prototyping Studio, Fabrication Files, BOM Generator |
+| Finish | Laser engrave, cut, or mark your finished parts | Laser Fabrication, Material Presets, PNG/SVG Export |
 
 ## Key Capabilities
 
 | Feature | Description |
 |---------|-------------|
-| **3D Prototyping** | AI-generated hardware blueprints with OpenSCAD, SVG laser-cut layouts, wiring diagrams, assembly steps, BOM, and community references |
-| **AI Design Advisor** | Persistent floating panel — decomposes ideas into subsystems, references component DB, triggers blueprint generation |
-| **Component Database** | 30+ real components (servos, MCUs, sensors, LEDs, power, hardware) with specs and prices injected into AI context |
-| **Design Templates** | 12 project archetypes (hexapod, quadruped, robotic arm, rover, doorknob, weather station, keypad, sculpture, lamp, clock, drone, plant monitor) |
-| **Design Practices** | Built-in DFM rules for 3D printing, laser cutting, electronics layout, and mechanical design |
-| **AI Design Generation** | Generate designs from text or voice prompts in 4 styles |
-| **Image Processing** | Floyd-Steinberg dithering, Sobel edge detection, brightness/contrast/threshold |
-| **Advanced Canvas Editor** | Konva-powered editor with AI inpainting, outpainting, and style transfer |
-| **Laser Fabrication** | Material presets, power/speed/passes tuning, PNG/SVG export for laser cutters |
-| **AI Prototyping Advisor** | Persistent floating panel: design decomposition, component sourcing, fabrication advice, blueprint trigger |
-| **Community & References** | Pull project ideas and design references from GitHub, Thingiverse, Instructables, Hackaday, GrabCAD, Adafruit Learn |
-| **Project Management** | Firebase-backed save/load/rename/duplicate with Google Auth |
+| 3D Prototyping | AI-generated hardware blueprints with OpenSCAD, SVG laser-cut layouts, wiring diagrams, assembly steps, BOM, and community references |
+| AI Design Advisor | Persistent floating panel that decomposes ideas into subsystems, references component DB, and triggers blueprint generation |
+| Component Database | 30+ real components (servos, MCUs, sensors, LEDs, power, hardware) with specs and prices injected into AI context |
+| Design Templates | 12 project archetypes (hexapod, quadruped, robotic arm, rover, doorknob, weather station, keypad, sculpture, lamp, clock, drone, plant monitor) |
+| Design Practices | Built-in DFM rules for 3D printing, laser cutting, electronics layout, and mechanical design |
+| AI Design Generation | Generate designs from text or voice prompts in 4 styles |
+| Image Processing | Floyd-Steinberg dithering, Sobel edge detection, brightness/contrast/threshold |
+| Advanced Canvas Editor | Konva-powered editor with AI inpainting, outpainting, and style transfer |
+| Laser Fabrication | Material presets, power/speed/passes tuning, PNG/SVG export for laser cutters |
+| AI Prototyping Advisor | Persistent floating panel: design decomposition, component sourcing, fabrication advice, blueprint trigger |
+| Community and References | Pull project ideas and design references from GitHub, Thingiverse, Instructables, Hackaday, GrabCAD, Adafruit Learn |
+| Project Management | Firebase-backed save/load/rename/duplicate with Google Auth |
 
 ## Technology Stack
 
@@ -63,7 +63,7 @@ Every project in SUBSTRATA follows a pipeline:
 
 ## Design Language
 
-SUBSTRATA uses a **frosted glass (glassmorphism)** design system with:
+SUBSTRATA uses a frosted glass (glassmorphism) design system with:
 - Dark background with radial gradient overlays
 - \`backdrop-blur\` panels with 5% white opacity
 - Cyan accent color (\`#00f2ff\`) throughout
@@ -72,15 +72,15 @@ SUBSTRATA uses a **frosted glass (glassmorphism)** design system with:
 
 ## Application Screenshots
 
-![3D Prototyping Studio — AI-powered hardware design engine](/docs/screenshots/01-prototyping-studio.png)
+![3D Prototyping Studio, AI-powered hardware design engine](/docs/screenshots/01-prototyping-studio.png)
 
-![Design Studio — Image generation, processing, and fabrication prep](/docs/screenshots/02-laser-studio.png)
+![Design Studio, image generation, processing, and fabrication prep](/docs/screenshots/02-laser-studio.png)
 
-![AI Prototyping Advisor — Expert chat with TTS voice responses](/docs/screenshots/03-advisor-tab.png)
+![AI Prototyping Advisor, expert chat with TTS voice responses](/docs/screenshots/03-advisor-tab.png)
 
-![Maintenance Dashboard — Safety checks, stats, and troubleshooting](/docs/screenshots/04-maintenance-tab.png)
+![Maintenance Dashboard, safety checks, stats, and troubleshooting](/docs/screenshots/04-maintenance-tab.png)
 
-![Project Library — Cloud-synced project gallery with templates](/docs/screenshots/05-library-tab.png)
+![Project Library, cloud-synced project gallery with templates](/docs/screenshots/05-library-tab.png)
 `
   },
   {
@@ -90,7 +90,7 @@ SUBSTRATA uses a **frosted glass (glassmorphism)** design system with:
     content: `
 # The Prototyping Pipeline
 
-SUBSTRATA is built around one core idea: **every physical product starts as an idea and ends as a real object.** The app structures this journey into clear stages.
+SUBSTRATA structures the journey from idea to finished object into clear stages.
 
 ## Stage 1: Ideate
 
@@ -114,7 +114,7 @@ Browse real-world projects from the maker community:
 | **Adafruit Learn** | Electronics tutorials, component guides, wiring diagrams | learn.adafruit.com |
 
 ### Tips for Ideation
-- Search Thingiverse for existing models before designing from scratch — remix is faster than re-inventing
+- Search Thingiverse for existing models before designing from scratch. Remixing is faster than re-inventing.
 - Check Hackaday for similar projects to learn from others' mistakes
 - Use GitHub to find firmware/code you can adapt for your control systems
 - Browse Instructables for material and technique ideas you might not have considered
@@ -123,18 +123,18 @@ Browse real-world projects from the maker community:
 
 ## Stage 2: Design
 
-Turn your concept into a visual design — either 2D artwork or a full 3D hardware blueprint.
+Turn your concept into a visual design, whether 2D artwork or a full 3D hardware blueprint.
 
 ### 2D Design Path (Design Studio)
 1. **Text Prompt**: Describe your design and pick a style (minimalist, deconstructivist, classical, organic)
-2. **Voice Prompt**: Hold the mic button and speak your design — transcribed and generated automatically
+2. **Voice Prompt**: Hold the mic button and speak your design, which is transcribed and generated automatically
 3. **File Upload**: Import an existing PNG, JPEG, or SVG (up to 10MB)
 4. **Templates**: Start from a pre-built template (Geometric Wolf, Mandala, Celtic Knot, etc.)
 
 ### 3D Design Path (Prototyping Studio)
 1. Describe your hardware project in the Design Objectives textarea
 2. Select your target 3D printer (Saturn 3 Ultra Resin, Formbot T-Rex 2 FDM, or Custom)
-3. Click **GENERATE BLUEPRINT** — Gemini Pro with deep thinking generates a complete project:
+3. Click **GENERATE BLUEPRINT** and Gemini Pro generates a complete project:
    - OpenSCAD code for parametric 3D parts
    - SVG layouts for laser-cut flat parts
    - Wiring diagrams with pin assignments
@@ -144,7 +144,7 @@ Turn your concept into a visual design — either 2D artwork or a full 3D hardwa
    - Design notes and rationale
    - Community references to similar open-source projects
 
-### Advisor → Blueprint Pipeline
+### Advisor to Blueprint Pipeline
 The AI Design Advisor (floating bottom-right) is tightly integrated with the Prototyping Studio:
 1. Chat with the advisor about your project idea
 2. The advisor decomposes it into subsystems, references the component database, applies design practices
@@ -160,14 +160,14 @@ Refine your design with image processing and AI-powered editing.
 ### Image Processing Pipeline
 All images pass through a real-time processing pipeline:
 
-1. **Grayscale Conversion** — Luma-weighted (0.299R + 0.587G + 0.114B)
-2. **Brightness Adjustment** — Range: -100% to +100%
-3. **Contrast Enhancement** — Factor-based with clamping
-4. **Palette Inversion** — Optional color inversion
-5. **Binarization** — Choose between:
-   - **Floyd-Steinberg Dithering** — Error diffusion for smooth gradients (great for photos)
-   - **Sobel Edge Detection** — Extracts edges for cutting/etching paths
-   - **Simple Threshold** — Hard black/white split at configurable threshold (0-255)
+1. **Grayscale Conversion**: Luma-weighted (0.299R + 0.587G + 0.114B)
+2. **Brightness Adjustment**: Range -100% to +100%
+3. **Contrast Enhancement**: Factor-based with clamping
+4. **Palette Inversion**: Optional color inversion
+5. **Binarization**: Choose between:
+   - **Floyd-Steinberg Dithering**: Error diffusion for smooth gradients (great for photos)
+   - **Sobel Edge Detection**: Extracts edges for cutting/etching paths
+   - **Simple Threshold**: Hard black/white split at configurable threshold (0-255)
 
 ### Filter Presets
 | Preset | Brightness | Contrast | Threshold | Dither | Edge |
@@ -185,7 +185,7 @@ Open the full canvas editor for precision work:
 - **Eraser**: Brush-based erasing
 - **Text**: Add text overlays
 - **AI Inpaint**: Select a region and describe what should fill it
-- **AI Outpaint**: Extend image edges seamlessly
+- **AI Outpaint**: Extend image edges with generated content
 - **Style Transfer**: Restyle the entire image (e.g., "make it art deco" or "convert to technical drawing")
 
 ---
@@ -194,9 +194,9 @@ Open the full canvas editor for precision work:
 
 Generate the files and specs needed to physically manufacture your design.
 
-### 3D Printing & Design Files
+### 3D Printing and Design Files
 The Prototyping Studio generates real, usable design files:
-- **OpenSCAD Code**: Parametric 3D part definitions (\`.scad\`) — render, modify, and print
+- **OpenSCAD Code**: Parametric 3D part definitions (\`.scad\`) that you can render, modify, and print
 - **SVG Laser-Cut Layouts**: Vector paths for flat parts, mounting plates, structural members
 - **Wiring Diagrams**: Pin-by-pin connection tables for microcontrollers, sensors, and actuators
 - **Assembly Steps**: Numbered step-by-step build instructions
@@ -216,7 +216,7 @@ The Prototyping Studio generates real, usable design files:
 
 ## Stage 5: Finish
 
-The final fabrication step — laser engraving, cutting, or marking.
+The final fabrication step: laser engraving, cutting, or marking.
 
 ### Laser Fabrication
 - **9 Material Presets**: Pre-configured power/speed/passes for Kraft paper, Plywood, Solid wood, Bamboo, Cork, Leather, Silica gel, Dark Felt, Tin plate
@@ -237,18 +237,18 @@ The final fabrication step — laser engraving, cutting, or marking.
     title: 'Design Guides',
     icon: 'Palette',
     content: `
-# Design Guides & Best Practices
+# Design Guides and Best Practices
 
 ## Rapid Prototyping Principles
 
 ### 1. Start Rough, Iterate Fast
 - Use the AI advisor to quickly validate your concept before committing to CAD
 - Generate a 3D blueprint first to understand scale, part count, and cost
-- Don't over-detail your first prototype — get the form factor right, then refine
+- Don't over-detail your first prototype. Get the form factor right, then refine.
 
 ### 2. Design for Manufacturing (DFM)
 - **3D Printing**: Avoid overhangs >45° without supports. Use minimum 1.2mm wall thickness for FDM, 0.8mm for SLA
-- **Laser Cutting**: Design for the kerf — laser cuts remove ~0.1-0.3mm of material. Adjust tolerances accordingly
+- **Laser Cutting**: Design for the kerf. Laser cuts remove ~0.1-0.3mm of material, so adjust tolerances accordingly.
 - **Assembly**: Design snap-fit joints or screw bosses into your 3D prints to avoid glue
 
 ### 3. Material Selection Guide
@@ -263,8 +263,8 @@ The final fabrication step — laser engraving, cutting, or marking.
 | **Plywood** | Enclosures, frames, decorative | Laser Cut/Engrave | 3mm-6mm ideal for laser, cheap and fast |
 | **Acrylic** | Windows, light pipes, panels | Laser Cut | Clean edges, available in colors, cracks if forced |
 | **Leather** | Patches, covers, accessories | Laser Engrave | Low power, smells terrible, ventilate well |
-| **Cork** | Coasters, gaskets, padding | Laser Engrave | Low density, burns easily — use low power |
-| **Kraft paper** | Stencils, templates, patterns | Laser Cut | Fastest iteration cycle — cut and test in seconds |
+| **Cork** | Coasters, gaskets, padding | Laser Engrave | Low density, burns easily, use low power |
+| **Kraft paper** | Stencils, templates, patterns | Laser Cut | Fastest iteration cycle, cut and test in seconds |
 
 ### 4. Design Style Guide
 
@@ -294,13 +294,13 @@ When using AI design generation, choose your style based on the end use:
 4. Laser-cut flat structural members from plywood or acrylic
 5. 3D print complex joints, mounts, and brackets
 
-### Custom Gifts & Décor
+### Custom Gifts and Décor
 1. Use the AI Design Generator with the **classical** or **organic** style
 2. Process through the image pipeline with Floyd-Steinberg dithering for photo engravings
 3. Use Sobel edge detection for clean line art on wood or leather
 4. Apply material presets for consistent results across multiple pieces
 
-### PCB & Circuit Prototyping
+### PCB and Circuit Prototyping
 1. Use the AI advisor to discuss circuit design and component selection
 2. Generate an enclosure blueprint that accounts for your PCB dimensions
 3. Laser-cut a solder paste stencil from Kraft paper or Mylar
@@ -311,12 +311,12 @@ When using AI design generation, choose your style based on the end use:
 ## Image Processing Best Practices
 
 ### For Photo Engravings
-- Use **Floyd-Steinberg dithering** — it preserves gradients better than simple threshold
+- Use **Floyd-Steinberg dithering** because it preserves gradients better than simple threshold
 - Increase contrast to +30-50% before dithering for more dramatic results
 - Set brightness slightly negative (-5 to -15%) to preserve shadow detail
 - Test on cardboard first at low power before committing to final material
 
-### For Line Art & Logos
+### For Line Art and Logos
 - Use **Sobel edge detection** for automatic edge extraction
 - Or use **Stencil preset** (high threshold, edge detection on) for clean black/white
 - Invert colors if your design is light-on-dark
@@ -324,11 +324,11 @@ When using AI design generation, choose your style based on the end use:
 ### For Cutting Paths
 - Enable **Sobel edge detection** to extract cut lines
 - Export as SVG for vector-based cutting in LaserGRBL or LightBurn
-- Verify closed paths — open paths won't cut properly
+- Verify closed paths. Open paths won't cut properly.
 
-### Resolution & Scale
+### Resolution and Scale
 - Generate at 1:1 aspect ratio for square engravings
-- The ACMER S1 work area is 130x130mm — design within this boundary
+- The ACMER S1 work area is 130x130mm, so design within this boundary
 - For larger projects, tile your design and use registration marks
 `
   },
@@ -337,11 +337,11 @@ When using AI design generation, choose your style based on the end use:
     title: 'Community Sources',
     icon: 'Globe',
     content: `
-# Community Sources & Inspiration
+# Community Sources and Inspiration
 
 SUBSTRATA connects you to the global maker community. Use these platforms to find inspiration, download existing models, fork open-source hardware, and learn from others' builds.
 
-## GitHub — Open Source Hardware
+## GitHub: Open Source Hardware
 
 **Best for**: Firmware, schematics, reference designs, PCB files, documentation
 
@@ -362,7 +362,7 @@ SUBSTRATA connects you to the global maker community. Use these platforms to fin
 
 ---
 
-## Thingiverse — 3D Printable Models
+## Thingiverse: 3D Printable Models
 
 **Best for**: Ready-to-print STL files, parametric designs, remixable models
 
@@ -373,21 +373,21 @@ SUBSTRATA connects you to the global maker community. Use these platforms to fin
 - Download STL files and use them as starting points in your Prototyping Studio
 
 ### Tips
-- Models tagged **Customizer** have adjustable parameters — you can resize before downloading
+- Models tagged **Customizer** have adjustable parameters, so you can resize before downloading
 - Always read maker comments for print settings and gotchas
 - Look for multi-part assemblies that demonstrate good mechanical design
 - Sort by "Most Popular" to find battle-tested designs
 
 ---
 
-## Instructables — Build Guides
+## Instructables: Build Guides
 
 **Best for**: Step-by-step tutorials, multi-discipline projects, technique guides
 
 ### How to Use
 - Browse by category: Technology, Workshop, Craft, Living, Outside
 - Follow the step-by-step format to learn new fabrication techniques
-- Pay attention to the **Materials & Tools** list — it's the real-world BOM
+- Pay attention to the **Materials and Tools** list, which is the real-world BOM
 - Check the comments for tips, corrections, and improvements
 
 ### Recommended Categories for Prototyping
@@ -402,34 +402,34 @@ SUBSTRATA connects you to the global maker community. Use these platforms to fin
 
 ---
 
-## Hackaday — Hardware Hacking
+## Hackaday: Hardware Hacking
 
 **Best for**: Engineering deep-dives, teardowns, unique builds, IoT projects
 
 ### How to Use
 - Browse the project feed on **hackaday.io** for current maker projects
 - Read the blog posts on **hackaday.com** for technique articles and teardowns
-- Use the project logs to see iteratice development — learn from failures, not just successes
+- Use the project logs to see iterative development. Learn from failures, not just successes.
 - The comments section often contains expert-level critiques and suggestions
 
 ### Why Hackaday is Valuable
 - Projects show the **full engineering process**, not just the final result
 - Teardowns teach you how commercial products are designed and manufactured
 - Articles cover niche techniques (flex PCBs, injection molding at home, resin casting)
-- The community skews toward experienced engineers — high signal, low noise
+- The community skews toward experienced engineers with high signal, low noise
 
 ---
 
-## Workflow: Community → SUBSTRATA
+## Workflow: Community to SUBSTRATA
 
 Here's how to integrate community sources into your prototyping pipeline:
 
-1. **Find inspiration** — Browse any of the four sources for a project similar to yours
-2. **Adapt the concept** — Use the AI Advisor to discuss modifications and improvements
-3. **Generate your design** — Describe your adapted idea in the Prototyping Studio
-4. **Source parts** — Use the generated BOM or reference the community project's parts list
-5. **Fabricate** — Print, cut, and engrave using SUBSTRATA's tools
-6. **Share back** — Open-source your improvements on GitHub, post your remix on Thingiverse
+1. Find inspiration: Browse any of the four sources for a project similar to yours
+2. Adapt the concept: Use the AI Advisor to discuss modifications and improvements
+3. Generate your design: Describe your adapted idea in the Prototyping Studio
+4. Source parts: Use the generated BOM or reference the community project's parts list
+5. Fabricate: Print, cut, and engrave using SUBSTRATA's tools
+6. Share back: Open-source your improvements on GitHub, post your remix on Thingiverse
 `
   },
   {
@@ -441,18 +441,18 @@ Here's how to integrate community sources into your prototyping pipeline:
 
 ## 1. 3D Prototyping Studio
 
-The Prototyping Studio is an AI-powered hardware design engine that generates complete prototyping blueprints — including real design files — from text descriptions.
+The Prototyping Studio is an AI-powered hardware design engine that generates complete prototyping blueprints, including real design files, from text descriptions.
 
-![3D Prototyping Studio — Generate complete hardware blueprints from text descriptions](/docs/screenshots/01-prototyping-studio.png)
+![3D Prototyping Studio, generate complete hardware blueprints from text descriptions](/docs/screenshots/01-prototyping-studio.png)
 
 ### Workflow
 1. Describe your hardware project in the Design Objectives textarea
 2. Select your target 3D printer (Saturn 3 Ultra Resin, Formbot T-Rex 2 FDM, or Custom)
-3. Click **GENERATE BLUEPRINT** — Gemini Pro with deep thinking generates a complete project
+3. Click **GENERATE BLUEPRINT** and Gemini Pro with deep thinking generates a complete project
 
 ### Generated Outputs
 - **3D Workspace**: Interactive Three.js viewport with orbit controls and multi-light staging
-- **OpenSCAD Code**: Parametric 3D part definitions — copy and render in OpenSCAD
+- **OpenSCAD Code**: Parametric 3D part definitions that you can copy and render in OpenSCAD
 - **SVG Laser-Cut Layouts**: Vector paths for flat structural parts, mounting plates, panels
 - **Wiring Diagrams**: Pin-by-pin connection tables for MCUs, sensors, and actuators
 - **Assembly Steps**: Numbered step-by-step build instructions
@@ -462,7 +462,7 @@ The Prototyping Studio is an AI-powered hardware design engine that generates co
 - **Community References**: Links to similar open-source projects
 
 ### Design File Tabs
-The Fabrication & Design Files view provides three sub-tabs:
+The Fabrication and Design Files view provides three sub-tabs:
 | Tab | Content | Color Theme |
 |-----|---------|-------------|
 | **OpenSCAD** | Parametric 3D part code (\`.scad\`) | Blue |
@@ -490,7 +490,7 @@ hexapod, quadruped, robotic arm, wheeled rover, LED doorknob, weather station, m
 
 The Design Studio is where you create, upload, and process 2D designs for fabrication.
 
-![Design Studio — Image generation, processing, and fabrication preparation](/docs/screenshots/02-laser-studio.png)
+![Design Studio, image generation, processing, and fabrication preparation](/docs/screenshots/02-laser-studio.png)
 
 ### Image Input Methods
 - **File Upload**: Drag or click to upload PNG, JPEG, or SVG files (up to 10MB)
@@ -510,9 +510,9 @@ The Design Studio is where you create, upload, and process 2D designs for fabric
 
 ## 3. AI Design Advisor (Persistent)
 
-A persistent floating panel (bottom-right corner) providing full-spectrum prototyping consultation. Always visible, never buried in a tab.
+A persistent floating panel (bottom-right corner) providing prototyping consultation across all tabs. Visible at all times, not buried in a tab.
 
-![AI Design Advisor — Persistent floating panel with voice TTS responses](/docs/screenshots/03-advisor-tab.png)
+![AI Design Advisor, persistent floating panel with voice TTS responses](/docs/screenshots/03-advisor-tab.png)
 
 ### How It Works
 The advisor is always available in the bottom-right corner of the screen. Click to expand, collapse when you don't need it. It maintains conversation context across tabs.
@@ -528,7 +528,7 @@ The advisor is always available in the bottom-right corner of the screen. Click 
 - **Tool Use**: Can save material presets and trigger blueprints directly from conversation
 - **Google Search Grounding**: Real-time information retrieval for specs and pricing
 
-### Advisor → Blueprint Flow
+### Advisor to Blueprint Flow
 1. Describe your project idea to the advisor
 2. Advisor decomposes it, references component DB, suggests improvements
 3. Click **Build Blueprint from Discussion** or let the advisor auto-trigger
@@ -563,7 +563,7 @@ A full-featured canvas editor powered by Konva and Gemini AI synthesis.
 
 ## 5. Laser Fabrication
 
-Laser engraving and cutting is the **finishing step** in the prototyping pipeline — used for marking, labeling, decorating, or cutting flat parts.
+Laser engraving and cutting is the **finishing step** in the prototyping pipeline, used for marking, labeling, decorating, or cutting flat parts.
 
 ### Laser Parameters
 - **Power Output**: 0-100% (default 80%)
@@ -591,7 +591,7 @@ Laser engraving and cutting is the **finishing step** in the prototyping pipelin
 
 Machine health monitoring and troubleshooting.
 
-![Maintenance Dashboard — Safety checks, machine stats, and troubleshooting guides](/docs/screenshots/04-maintenance-tab.png)
+![Maintenance Dashboard, safety checks, machine stats, and troubleshooting guides](/docs/screenshots/04-maintenance-tab.png)
 
 ### Status Cards
 - **Safety**: Goggles verification, exhaust system status
@@ -609,7 +609,7 @@ Machine health monitoring and troubleshooting.
 
 Cloud-backed project management with Google authentication.
 
-![Project Library — Cloud-synced project gallery with templates](/docs/screenshots/05-library-tab.png)
+![Project Library, cloud-synced project gallery with templates](/docs/screenshots/05-library-tab.png)
 
 ### Features
 - **New Project**: Start fresh
@@ -633,11 +633,11 @@ Generates a design image using Gemini 3.1 Flash Image Preview.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| prompt | string | — | Design description |
+| prompt | string | required | Design description |
 | style | string | "minimalist" | One of: minimalist, deconstructivist, classical, organic |
 | aspectRatio | string | "1:1" | Output aspect ratio |
 
-**Returns**: \`Promise<string | null>\` — Base64 data URL of the generated PNG
+**Returns**: \`Promise<string | null>\`: Base64 data URL of the generated PNG
 
 ---
 
@@ -648,7 +648,7 @@ Analyzes a material image and suggests optimal fabrication approach and settings
 |-----------|------|-------------|
 | imageBase64 | string | Base64-encoded image (data URL) |
 
-**Returns**: \`Promise<string>\` — Text analysis with material identification and recommended settings
+**Returns**: \`Promise<string>\`: Text analysis with material identification and recommended settings
 
 **Model**: Gemini 3.1 Pro Preview
 
@@ -659,15 +659,15 @@ Chat with the AI design advisor. The advisor has access to the full component da
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| query | string | — | User message |
+| query | string | required | User message |
 | history | Array | [] | Previous conversation messages |
 | useThinking | boolean | false | Enable deep thinking (Gemini Pro + HIGH thinking level) |
 
 **Returns**: \`Promise<{ text: string, calls: FunctionCall[] }>\`
 
 **Tools Available**:
-- \`save_material_preset\` — Saves power/speed/passes settings for a named material
-- \`generate_blueprint\` — Triggers full blueprint generation with a project description
+- \`save_material_preset\`: Saves power/speed/passes settings for a named material
+- \`generate_blueprint\`: Triggers full blueprint generation with a project description
 
 ---
 
@@ -676,12 +676,12 @@ Generates a complete prototyping blueprint with OpenSCAD code, SVG layouts, wiri
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| prompt | string | — | Design objectives and project description |
+| prompt | string | required | Design objectives and project description |
 | designStyle | string | "minimalist" | Design style preference |
 | printer | string | "saturn3ultra" | Target 3D printer |
 | advisorContext | string | "" | Conversation context from the advisor panel |
 
-**Returns**: \`Promise<object>\` — Complete blueprint with name, description, parts[], openscadCode, svgDesign, wiringDiagram, assemblySteps[], code, printingFiles[], designNotes, communityRefs[]
+**Returns**: \`Promise<object>\`: Complete blueprint with name, description, parts[], openscadCode, svgDesign, wiringDiagram, assemblySteps[], code, printingFiles[], designNotes, communityRefs[]
 
 **Model**: Gemini 3.1 Pro Preview with ThinkingLevel.HIGH
 
@@ -699,7 +699,7 @@ AI-powered image editing for the Advanced Editor.
 | imageBase64 | string? | Source image |
 | maskBase64 | string? | Mask image for inpainting |
 
-**Returns**: \`Promise<string | null>\` — Modified image as data URL
+**Returns**: \`Promise<string | null>\`: Modified image as data URL
 
 ---
 
@@ -710,7 +710,7 @@ Transcribes audio to text for voice-driven design prompts.
 |-----------|------|-------------|
 | audioBase64 | string | Base64-encoded WAV audio |
 
-**Returns**: \`Promise<string>\` — Transcribed text
+**Returns**: \`Promise<string>\`: Transcribed text
 
 ---
 
@@ -721,10 +721,10 @@ Converts text to speech using Gemini Flash TTS.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| text | string | — | Text to speak |
+| text | string | required | Text to speak |
 | voice | string | "Kore" | One of: Puck, Charon, Kore, Fenrir, Zephyr |
 
-**Returns**: \`Promise<void>\` — Plays audio via Web Audio API (24kHz, Int16 → Float32)
+**Returns**: \`Promise<void>\`: Plays audio via Web Audio API (24kHz, Int16 to Float32)
 
 ### \`cancelSpeech()\`
 Stops any currently playing TTS audio.
@@ -780,7 +780,7 @@ interface ImageProcessOptions {
 }
 \`\`\`
 
-**Returns**: \`Promise<string>\` — Processed image as PNG data URL
+**Returns**: \`Promise<string>\`: Processed image as PNG data URL
 
 **Processing Pipeline**:
 1. Load image onto Canvas
@@ -832,18 +832,18 @@ All user data is strictly sandboxed under \`/users/{auth.uid}/\`. Cross-user acc
 ### Security Test Vectors ("Dirty Dozen")
 12 attack vectors tested and verified:
 
-1. Identity Spoofing → DENIED
-2. Omission Attack → DENIED  
-3. Immutability Breach → DENIED
-4. Cross-User Read → DENIED
-5. Cross-User Delete → DENIED
-6. Ghost Field Injection → DENIED
-7. Temporal Spoofing → DENIED
-8. Resource Poisoning → DENIED
-9. Unauthenticated Write → DENIED
-10. Profile Hijacking → DENIED
-11. Malformed ID → DENIED
-12. State Shortcutting → DENIED
+1. Identity Spoofing: DENIED
+2. Omission Attack: DENIED  
+3. Immutability Breach: DENIED
+4. Cross-User Read: DENIED
+5. Cross-User Delete: DENIED
+6. Ghost Field Injection: DENIED
+7. Temporal Spoofing: DENIED
+8. Resource Poisoning: DENIED
+9. Unauthenticated Write: DENIED
+10. Profile Hijacking: DENIED
+11. Malformed ID: DENIED
+12. State Shortcutting: DENIED
 
 ## API Key Management
 - Gemini API key is injected at build time via Vite's \`define\` plugin
@@ -862,10 +862,10 @@ Specific paths are then explicitly opened with validation.
   },
   {
     id: 'setup',
-    title: 'Setup & Deployment',
+    title: 'Setup and Deployment',
     icon: 'Wrench',
     content: `
-# Setup & Deployment
+# Setup and Deployment
 
 ## Prerequisites
 - Node.js 18+
@@ -931,7 +931,7 @@ substrata-by-gantasmo/
 │   ├── App.tsx                 # Main application + persistent advisor
 │   ├── main.tsx                # React entry point
 │   ├── index.css               # Global styles + glassmorphism theme
-│   ├── constants.ts            # Material presets & templates
+│   ├── constants.ts            # Material presets and templates
 │   ├── designDatabase.ts       # Component DB, design templates, DFM practices
 │   ├── components/
 │   │   ├── PrototypingStudio.tsx   # 3D AI prototyping (OpenSCAD/SVG/wiring)
@@ -967,18 +967,18 @@ substrata-by-gantasmo/
 \`\`\`mermaid
 graph TB
     subgraph Client["Browser Client - React + Vite"]
-        App["App.tsx — Main Orchestrator"]
-        PS["PrototypingStudio.tsx — 3D Hardware Engine"]
-        AE["AdvancedEditor.tsx — Canvas Editor"]
+        App["App.tsx: Main Orchestrator"]
+        PS["PrototypingStudio.tsx: 3D Hardware Engine"]
+        AE["AdvancedEditor.tsx: Canvas Editor"]
         subgraph Services["Service Layer"]
-            GS["geminiService.ts — AI Generation"]
-            TTS["ttsService.ts — Text-to-Speech"]
-            ProjS["projectService.ts — CRUD"]
+            GS["geminiService.ts: AI Generation"]
+            TTS["ttsService.ts: Text-to-Speech"]
+            ProjS["projectService.ts: CRUD"]
         end
         subgraph Libs["Core Libraries"]
-            IP["imageProcessor.ts — Dithering / Edge Detect"]
-            FB["firebase.ts — Auth + Firestore"]
-            CONST["constants.ts — Material Presets"]
+            IP["imageProcessor.ts: Dithering / Edge Detect"]
+            FB["firebase.ts: Auth + Firestore"]
+            CONST["constants.ts: Material Presets"]
         end
     end
     subgraph External["External Services"]
@@ -987,10 +987,10 @@ graph TB
         ThreeJS["Three.js / R3F"]
     end
     subgraph Community["Community Sources"]
-        GH["GitHub — Open Source Hardware"]
-        TV["Thingiverse — 3D Models"]
-        INS["Instructables — Build Guides"]
-        HD["Hackaday — Engineering Projects"]
+        GH["GitHub: Open Source Hardware"]
+        TV["Thingiverse: 3D Models"]
+        INS["Instructables: Build Guides"]
+        HD["Hackaday: Engineering Projects"]
     end
     App --> PS
     App --> AE
@@ -1158,20 +1158,20 @@ erDiagram
 export const MERMAID_DIAGRAMS = {
   architecture: `graph TB
     subgraph Client["Browser Client - React + Vite"]
-        App["App.tsx — Main Orchestrator"]
-        PS["PrototypingStudio.tsx — 3D Hardware Engine"]
-        AE["AdvancedEditor.tsx — Canvas Editor"]
-        DDB["designDatabase.ts — Components/Templates"]
-        ADV["Persistent Advisor — Floating Panel"]
+        App["App.tsx: Main Orchestrator"]
+        PS["PrototypingStudio.tsx: 3D Hardware Engine"]
+        AE["AdvancedEditor.tsx: Canvas Editor"]
+        DDB["designDatabase.ts: Components/Templates"]
+        ADV["Persistent Advisor: Floating Panel"]
         subgraph Services["Service Layer"]
-            GS["geminiService.ts — AI + Blueprint Gen"]
-            TTS["ttsService.ts — Text-to-Speech"]
-            ProjS["projectService.ts — CRUD"]
+            GS["geminiService.ts: AI + Blueprint Gen"]
+            TTS["ttsService.ts: Text-to-Speech"]
+            ProjS["projectService.ts: CRUD"]
         end
         subgraph Libs["Core Libraries"]
-            IP["imageProcessor.ts — Dithering / Edge Detect"]
-            FB["firebase.ts — Auth + Firestore"]
-            CONST["constants.ts — Material Presets"]
+            IP["imageProcessor.ts: Dithering / Edge Detect"]
+            FB["firebase.ts: Auth + Firestore"]
+            CONST["constants.ts: Material Presets"]
         end
     end
     subgraph External["External Services"]
