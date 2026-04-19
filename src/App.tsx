@@ -164,21 +164,49 @@ function parseOpenSCAD(code: string): ParsedPrimitive[] {
   const primitives: ParsedPrimitive[] = [];
   if (!code || code.startsWith('//')) return primitives;
 
-  // Extract module blocks for labeling
-  const moduleRegex = /module\s+(\w+)\s*\(\s*\)\s*\{([^}]*(?:\{[^}]*\}[^}]*)*)\}/g;
-  let moduleMatch;
+  // Better module extraction: match braces to handle nested blocks
+  const extractModules = (src: string): { name: string, body: string }[] => {
+    const modules: { name: string, body: string }[] = [];
+    const moduleStartRegex = /module\s+(\w+)\s*\([^)]*\)\s*\{/g;
+    let match;
+    while ((match = moduleStartRegex.exec(src)) !== null) {
+      const name = match[1];
+      let depth = 1;
+      let pos = match.index + match[0].length;
+      const start = pos;
+      while (pos < src.length && depth > 0) {
+        if (src[pos] === '{') depth++;
+        else if (src[pos] === '}') depth--;
+        pos++;
+      }
+      modules.push({ name, body: src.slice(start, pos - 1) });
+    }
+    return modules;
+  };
+
+  const modules = extractModules(code);
   let colorIdx = 0;
 
-  while ((moduleMatch = moduleRegex.exec(code)) !== null) {
-    const moduleName = moduleMatch[1];
-    const moduleBody = moduleMatch[2];
+  for (const mod of modules) {
+    if (mod.name === 'assembly') continue; // parse assembly last to avoid duplication
     const color = PART_COLORS[colorIdx++ % PART_COLORS.length];
-    extractPrimitives(moduleBody, moduleName, color, primitives, colorIdx);
+    extractPrimitives(mod.body, mod.name, color, primitives, colorIdx);
+  }
+
+  // Parse assembly module if present (it may call other modules, but also has inline geometry)
+  const assemblyMod = modules.find(m => m.name === 'assembly');
+  if (assemblyMod) {
+    extractPrimitives(assemblyMod.body, 'assembly', PART_COLORS[colorIdx % PART_COLORS.length], primitives, colorIdx);
   }
 
   // Also parse top-level primitives outside modules
-  const outsideModules = code.replace(moduleRegex, '');
-  extractPrimitives(outsideModules, 'part', PART_COLORS[colorIdx % PART_COLORS.length], primitives, colorIdx);
+  let outsideStr = code;
+  for (const mod of modules) {
+    outsideStr = outsideStr.replace(new RegExp(`module\\s+${mod.name}\\s*\\([^)]*\\)\\s*\\{[\\s\\S]*?\\}`, ''), '');
+  }
+  if (outsideStr.match(/cube|cylinder|sphere/)) {
+    extractPrimitives(outsideStr, 'part', PART_COLORS[colorIdx % PART_COLORS.length], primitives, colorIdx);
+  }
 
   // If nothing was parsed, generate geometry from the parts list structure
   if (primitives.length === 0) {
@@ -198,83 +226,143 @@ function parseOpenSCAD(code: string): ParsedPrimitive[] {
 }
 
 function extractPrimitives(body: string, moduleName: string, color: string, out: ParsedPrimitive[], seedOffset: number) {
-  // Track translate context
+  // Track transform stack for nested scopes
   const lines = body.split('\n');
   let currentTranslate: [number, number, number] = [0, 0, 0];
   let currentRotation: [number, number, number] = [0, 0, 0];
+  let currentColor = color;
 
   for (const line of lines) {
     const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('//')) continue;
+
+    // Parse color
+    const colorMatch = trimmed.match(/color\(\s*"(\w+)"\s*\)/) || trimmed.match(/color\(\s*\[([\d.,\s]+)\]\s*\)/);
+    if (colorMatch) {
+      const namedColors: Record<string, string> = {
+        red: '#ef4444', blue: '#3b82f6', green: '#22c55e', yellow: '#eab308',
+        orange: '#f97316', purple: '#a855f7', cyan: '#06b6d4', pink: '#ec4899',
+        white: '#f8fafc', gray: '#6b7280', black: '#1e293b', silver: '#94a3b8'
+      };
+      if (colorMatch[1] && namedColors[colorMatch[1].toLowerCase()]) {
+        currentColor = namedColors[colorMatch[1].toLowerCase()];
+      }
+    }
 
     // Parse translate
-    const translateMatch = trimmed.match(/translate\(\[([^)]+)\]\)/);
+    const translateMatch = trimmed.match(/translate\(\[([^\]]+)\]\)/);
     if (translateMatch) {
       const vals = translateMatch[1].split(',').map(v => parseFloat(v.trim()) || 0);
-      // Scale down large dimensions (OpenSCAD uses mm, we render in scene units)
-      const scale = Math.max(1, Math.max(...vals.map(Math.abs)) / 5);
+      const maxVal = Math.max(1, ...vals.map(Math.abs));
+      const scale = maxVal > 10 ? maxVal / 5 : 1;
       currentTranslate = [(vals[0] || 0) / scale, (vals[2] || 0) / scale, (vals[1] || 0) / scale];
     }
 
     // Parse rotate
-    const rotateMatch = trimmed.match(/rotate\(\[([^)]+)\]\)/);
+    const rotateMatch = trimmed.match(/rotate\(\[([^\]]+)\]\)/);
     if (rotateMatch) {
       const vals = rotateMatch[1].split(',').map(v => (parseFloat(v.trim()) || 0) * Math.PI / 180);
       currentRotation = [vals[0] || 0, vals[2] || 0, vals[1] || 0];
     }
 
-    // Parse cube
-    const cubeMatch = trimmed.match(/cube\(\[([^)]+)\](?:,\s*center\s*=\s*true)?\)/);
+    // Parse cube — support both cube([x,y,z]) and cube(size)
+    const cubeMatch = trimmed.match(/cube\(\[([^\]]+)\]/) || trimmed.match(/cube\((\d[\d.]*)\)/);
     if (cubeMatch) {
-      const dims = cubeMatch[1].split(',').map(v => parseFloat(v.trim()) || 1);
-      const scale = Math.max(1, Math.max(...dims) / 4);
+      let dims: number[];
+      if (cubeMatch[1].includes(',')) {
+        dims = cubeMatch[1].split(',').map(v => parseFloat(v.trim()) || 1);
+      } else {
+        const s = parseFloat(cubeMatch[1]) || 1;
+        dims = [s, s, s];
+      }
+      const maxDim = Math.max(...dims);
+      const scale = maxDim > 8 ? maxDim / 4 : 1;
       out.push({
         type: 'cube',
-        args: [(dims[0] || 1) / scale, (dims[2] || 1) / scale, (dims[1] || 1) / scale],
+        args: [(dims[0] || 1) / scale, (dims[2] || dims[0] || 1) / scale, (dims[1] || dims[0] || 1) / scale],
         position: [...currentTranslate],
         rotation: [...currentRotation],
-        color,
+        color: currentColor,
         label: moduleName
       });
       currentTranslate = [0, 0, 0];
       currentRotation = [0, 0, 0];
+      currentColor = color;
     }
 
-    // Parse cylinder
-    const cylMatch = trimmed.match(/cylinder\(\s*(?:r\s*=\s*([\d.]+)|r1\s*=\s*([\d.]+)\s*,\s*r2\s*=\s*([\d.]+)|d\s*=\s*([\d.]+))?\s*(?:,\s*)?(?:h\s*=\s*([\d.]+))?\s*(?:,\s*\$fn\s*=\s*(\d+))?\s*\)/);
-    if (cylMatch) {
-      const r = parseFloat(cylMatch[1]) || parseFloat(cylMatch[4]) / 2 || 0.5;
-      const r2 = parseFloat(cylMatch[3]) || r;
-      const h = parseFloat(cylMatch[5]) || 1;
-      const segments = parseInt(cylMatch[6]) || 24;
-      const scale = Math.max(1, Math.max(r * 2, h) / 4);
+    // Parse cylinder — multiple syntax variants
+    const cylMatch = trimmed.match(/cylinder\(([^)]+)\)/);
+    if (cylMatch && !cubeMatch) {
+      const args = cylMatch[1];
+      let r = 0.5, r2 = 0.5, h = 1, segments = 24;
+
+      // Named params
+      const rMatch = args.match(/(?:^|,|\s)r\s*=\s*([\d.]+)/);
+      const r1Match = args.match(/r1\s*=\s*([\d.]+)/);
+      const r2Match = args.match(/r2\s*=\s*([\d.]+)/);
+      const dMatch = args.match(/(?:^|,|\s)d\s*=\s*([\d.]+)/);
+      const d1Match = args.match(/d1\s*=\s*([\d.]+)/);
+      const d2Match = args.match(/d2\s*=\s*([\d.]+)/);
+      const hMatch = args.match(/h\s*=\s*([\d.]+)/);
+      const fnMatch = args.match(/\$fn\s*=\s*(\d+)/);
+
+      if (rMatch) r = r2 = parseFloat(rMatch[1]);
+      if (r1Match) r = parseFloat(r1Match[1]);
+      if (r2Match) r2 = parseFloat(r2Match[1]);
+      if (dMatch) r = r2 = parseFloat(dMatch[1]) / 2;
+      if (d1Match) r = parseFloat(d1Match[1]) / 2;
+      if (d2Match) r2 = parseFloat(d2Match[1]) / 2;
+      if (hMatch) h = parseFloat(hMatch[1]);
+      if (fnMatch) segments = parseInt(fnMatch[1]);
+
+      // Positional params fallback: cylinder(h, r) or cylinder(h, r1, r2)
+      if (!rMatch && !r1Match && !dMatch && !d1Match && !hMatch) {
+        const positional = args.split(',').map(v => parseFloat(v.trim())).filter(v => !isNaN(v));
+        if (positional.length >= 2) { h = positional[0]; r = r2 = positional[1]; }
+        if (positional.length >= 3) { r2 = positional[2]; }
+      }
+
+      const scale = Math.max(1, Math.max(r * 2, r2 * 2, h) / 4);
       out.push({
         type: 'cylinder',
         args: [r / scale, r2 / scale, h / scale, segments],
         position: [...currentTranslate],
         rotation: [...currentRotation],
-        color,
+        color: currentColor,
         label: moduleName
       });
       currentTranslate = [0, 0, 0];
       currentRotation = [0, 0, 0];
+      currentColor = color;
     }
 
     // Parse sphere
-    const sphereMatch = trimmed.match(/sphere\(\s*(?:r\s*=\s*([\d.]+)|d\s*=\s*([\d.]+)|([\d.]+))\s*(?:,\s*\$fn\s*=\s*(\d+))?\s*\)/);
-    if (sphereMatch) {
-      const r = parseFloat(sphereMatch[1]) || parseFloat(sphereMatch[2]) / 2 || parseFloat(sphereMatch[3]) || 0.5;
-      const segs = parseInt(sphereMatch[4]) || 24;
+    const sphereMatch = trimmed.match(/sphere\(([^)]+)\)/);
+    if (sphereMatch && !cubeMatch && !cylMatch) {
+      const args = sphereMatch[1];
+      let r = 0.5, segs = 24;
+
+      const rMatch = args.match(/(?:^|,|\s)r\s*=\s*([\d.]+)/);
+      const dMatch = args.match(/(?:^|,|\s)d\s*=\s*([\d.]+)/);
+      const fnMatch = args.match(/\$fn\s*=\s*(\d+)/);
+
+      if (rMatch) r = parseFloat(rMatch[1]);
+      else if (dMatch) r = parseFloat(dMatch[1]) / 2;
+      else { const v = parseFloat(args); if (!isNaN(v)) r = v; }
+      if (fnMatch) segs = parseInt(fnMatch[1]);
+
       const scale = Math.max(1, r / 2);
       out.push({
         type: 'sphere',
         args: [r / scale, segs, segs],
         position: [...currentTranslate],
         rotation: [...currentRotation],
-        color,
+        color: currentColor,
         label: moduleName
       });
       currentTranslate = [0, 0, 0];
       currentRotation = [0, 0, 0];
+      currentColor = color;
     }
   }
 }
@@ -282,46 +370,74 @@ function extractPrimitives(body: string, moduleName: string, color: string, out:
 const PrototypePreview = ({ openscadCode, parts }: { openscadCode: string; parts: Part[] }) => {
   const primitives = useMemo(() => {
     const parsed = parseOpenSCAD(openscadCode);
-    // If we got real parsed geometry, use it; otherwise generate from parts list
     if (parsed.length > 0) return parsed;
-    // Fallback: generate geometry from the parts list
-    return parts.map((part, i): ParsedPrimitive => {
-      const angle = (i / parts.length) * Math.PI * 2;
-      const radius = 1.5 + (i % 3) * 0.5;
+    // Smarter fallback: generate varied geometry from parts list with spatial layout
+    if (parts.length === 0) return [];
+    const results: ParsedPrimitive[] = [];
+    // Group parts by category for spatial organization
+    const categories = [...new Set(parts.map(p => p.category))];
+    parts.forEach((part, i) => {
+      const catIdx = categories.indexOf(part.category);
+      const row = Math.floor(i / 4);
+      const col = i % 4;
       const isFab = part.fabrication === '3d_print';
       const isLaser = part.fabrication === 'laser_cut';
-      return {
-        type: isFab ? 'cylinder' : isLaser ? 'cube' : 'sphere',
-        args: isFab ? [0.3, 0.3, 0.6, 16] : isLaser ? [0.8, 0.05, 0.8] : [0.25, 16, 16],
-        position: [Math.cos(angle) * radius, i * 0.15, Math.sin(angle) * radius],
-        rotation: [0, angle, 0],
+      const isElec = part.category === 'Electronics' || part.category === 'Sensor';
+      const isPower = part.category === 'Power';
+      // Choose geometry by type
+      let type: ParsedPrimitive['type'] = 'cube';
+      let args: number[];
+      if (isFab) { type = 'cylinder'; args = [0.25 + (i % 3) * 0.1, 0.25 + (i % 3) * 0.1, 0.4 + (i % 4) * 0.15, 24]; }
+      else if (isLaser) { type = 'cube'; args = [0.7 + (i % 2) * 0.3, 0.04, 0.7 + (i % 3) * 0.2]; }
+      else if (isElec) { type = 'cube'; args = [0.3, 0.1, 0.4]; }
+      else if (isPower) { type = 'cylinder'; args = [0.15, 0.15, 0.5, 12]; }
+      else { type = 'sphere'; args = [0.2 + (i % 3) * 0.05, 16, 16]; }
+
+      results.push({
+        type, args,
+        position: [(col - 1.5) * 1.2, catIdx * 0.8, (row - 1) * 1.2],
+        rotation: [0, (i * 0.3), 0],
         color: PART_COLORS[i % PART_COLORS.length],
         label: part.name
-      };
+      });
     });
+    return results;
   }, [openscadCode, parts]);
+
+  const [hovered, setHovered] = useState<number | null>(null);
 
   return (
     <group>
       {primitives.map((prim, i) => (
-        <mesh
-          key={i}
-          castShadow
-          receiveShadow
-          position={prim.position}
-          rotation={prim.rotation}
-        >
-          {prim.type === 'cube' && <boxGeometry args={prim.args as [number, number, number]} />}
-          {prim.type === 'cylinder' && <cylinderGeometry args={prim.args as [number, number, number, number]} />}
-          {prim.type === 'sphere' && <sphereGeometry args={prim.args as [number, number, number]} />}
-          <meshStandardMaterial
-            color={prim.color}
-            metalness={0.6}
-            roughness={0.3}
-            transparent
-            opacity={0.9}
-          />
-        </mesh>
+        <group key={i} position={prim.position} rotation={prim.rotation}>
+          <mesh
+            castShadow
+            receiveShadow
+            onPointerOver={() => setHovered(i)}
+            onPointerOut={() => setHovered(null)}
+            scale={hovered === i ? 1.05 : 1}
+          >
+            {prim.type === 'cube' && <boxGeometry args={prim.args as [number, number, number]} />}
+            {prim.type === 'cylinder' && <cylinderGeometry args={prim.args as [number, number, number, number]} />}
+            {prim.type === 'sphere' && <sphereGeometry args={prim.args as [number, number, number]} />}
+            <meshPhysicalMaterial
+              color={prim.color}
+              metalness={0.4}
+              roughness={0.35}
+              clearcoat={0.3}
+              clearcoatRoughness={0.2}
+              transparent
+              opacity={hovered === i ? 1 : 0.88}
+            />
+          </mesh>
+          {/* Wireframe edges */}
+          <mesh>
+            {prim.type === 'cube' && <boxGeometry args={prim.args as [number, number, number]} />}
+            {prim.type === 'cylinder' && <cylinderGeometry args={prim.args as [number, number, number, number]} />}
+            {prim.type === 'sphere' && <sphereGeometry args={prim.args as [number, number, number]} />}
+            <meshBasicMaterial color={prim.color} wireframe opacity={0.15} transparent />
+          </mesh>
+        </group>
       ))}
       {/* Ground plane */}
       <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]}>
@@ -1012,6 +1128,7 @@ export default function App() {
             onToggleMute={() => setIsAdvisorMuted(!isAdvisorMuted)}
             onSavePreset={handleSaveMaterialPreset}
             onBuildBlueprint={handleBuildBlueprint}
+            protoProject={protoProject}
           />
         </div>
         {/* Advisor toggle (always visible) */}
@@ -1501,25 +1618,53 @@ function ConsultantInterface({
   onToggleMute,
   onSavePreset,
   onBuildBlueprint,
+  protoProject,
 }: { 
   isMuted: boolean, 
   onToggleMute: () => void,
   onSavePreset: (name: string, settings: LaserSettings) => void,
   onBuildBlueprint: (description: string) => void,
+  protoProject: PrototypeProject | null,
 }) {
-  const [messages, setMessages] = useState<{ role: 'user' | 'assistant', content: string }[]>([
+  const [messages, setMessages] = useState<{ role: 'user' | 'assistant', content: string, files?: { name: string, content: string, ext: string }[] }[]>([
     { role: 'assistant', content: "SUBSTRATA Design Advisor online. Tell me what you want to build — I'll help you decompose it into subsystems, pick components, and design the parts. When you're ready, I'll trigger a full blueprint. What's your project idea?" }
   ]);
   const [input, setInput] = useState('');
   const [isThinking, setIsThinking] = useState(false);
   const [useDeepThinking, setUseDeepThinking] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, isThinking]);
+
+  // When a new blueprint is generated, add a message with downloadable files
+  const prevProjectRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (protoProject && protoProject.id !== prevProjectRef.current) {
+      prevProjectRef.current = protoProject.id;
+      const files: { name: string, content: string, ext: string }[] = [];
+      if (protoProject.openscadCode && !protoProject.openscadCode.startsWith('//')) {
+        files.push({ name: `${protoProject.name || 'design'}.scad`, content: protoProject.openscadCode, ext: 'scad' });
+      }
+      if (protoProject.svgDesign) {
+        files.push({ name: `${protoProject.name || 'design'}.svg`, content: protoProject.svgDesign, ext: 'svg' });
+      }
+      if (protoProject.wiringDiagram && protoProject.wiringDiagram !== 'No electronics in this design') {
+        files.push({ name: `${protoProject.name || 'design'}_wiring.txt`, content: protoProject.wiringDiagram, ext: 'txt' });
+      }
+      if (protoProject.code) {
+        files.push({ name: `${protoProject.name || 'firmware'}.ino`, content: protoProject.code, ext: 'ino' });
+      }
+      if (files.length > 0) {
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: `Blueprint for "${protoProject.name}" is ready! Here are your design files:`,
+          files
+        }]);
+      }
     }
-  }, [messages]);
+  }, [protoProject]);
 
   const sendMessage = async () => {
     if (!input.trim()) return;
@@ -1594,10 +1739,10 @@ function ConsultantInterface({
             </Button>
         </div>
       </div>
-      <ScrollArea className="flex-1 p-3" ref={scrollRef}>
+      <div className="flex-1 overflow-y-auto p-3 scrollbar-thin scrollbar-thumb-white/10">
         <div className="space-y-3">
           {messages.map((m, i) => (
-            <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div key={i} className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
               <div className={`max-w-[90%] rounded-xl px-3 py-2 text-xs leading-relaxed ${
                 m.role === 'user' 
                   ? 'bg-laser-accent text-black font-medium rounded-tr-none shadow-md' 
@@ -1605,6 +1750,30 @@ function ConsultantInterface({
               }`}>
                 {m.content}
               </div>
+              {m.files && m.files.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-1.5 max-w-[90%]">
+                  {m.files.map((f, j) => (
+                    <button
+                      key={j}
+                      className="flex items-center gap-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg px-2.5 py-1.5 text-[9px] text-white/70 hover:text-white transition-colors group"
+                      onClick={() => {
+                        const blob = new Blob([f.content], { type: 'text/plain' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = f.name;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                        toast.success(`Downloaded ${f.name}`);
+                      }}
+                    >
+                      <Download className="w-3 h-3 text-laser-accent group-hover:scale-110 transition-transform" />
+                      <span className="font-mono">{f.name}</span>
+                      <span className="text-[7px] uppercase tracking-wider text-white/30">{f.ext}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
           {isThinking && (
@@ -1616,8 +1785,9 @@ function ConsultantInterface({
                </div>
              </div>
           )}
+          <div ref={bottomRef} />
         </div>
-      </ScrollArea>
+      </div>
       <div className="p-2.5 border-t border-white/10 bg-black/30 flex flex-col gap-2">
         <div className="flex items-center justify-between px-1">
             <div className="flex items-center gap-2">

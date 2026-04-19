@@ -321,8 +321,8 @@ Return exactly as JSON.`,
               required: ["name", "source", "price", "speed", "category"]
             }
           },
-          openscadCode: { type: Type.STRING, description: "Complete OpenSCAD code for ALL 3D-printable custom parts. Each part as a module. Include assembly visualization." },
-          svgDesign: { type: Type.STRING, description: "SVG markup for laser-cut parts with real dimensions in mm. Include kerf compensation notes." },
+          openscadCode: { type: Type.STRING, description: "Complete OpenSCAD code for ALL 3D-printable custom parts. Each part as a module with translate(), rotate(), cube(), cylinder(), sphere() calls using NAMED PARAMETERS (e.g. cube([w,d,h]), cylinder(r=5, h=10), sphere(r=3)). Use varied shapes, rounded edges (cylinder for fillets), and realistic proportions. Include an assembly() module that positions all parts together. Use difference() for holes and cutouts. CRITICAL: every module MUST contain at least one primitive (cube/cylinder/sphere) with explicit numeric dimensions." },
+          svgDesign: { type: Type.STRING, description: "SVG markup for laser-cut parts with real dimensions in mm. Use <rect>, <circle>, <path>, <line> elements with proper x,y,width,height attributes. Include a viewBox. Add kerf compensation notes as comments. Use different stroke colors for cut (red) vs engrave (blue) lines." },
           wiringDiagram: { type: Type.STRING, description: "Full text wiring diagram showing EVERY connection: component pin → wire color → destination pin" },
           assemblySteps: {
             type: Type.ARRAY,
