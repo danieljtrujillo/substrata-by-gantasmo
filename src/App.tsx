@@ -3,11 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, Suspense } from 'react';
 import { 
   Plus, 
   Box,
   Settings, 
+  Settings2,
   Library, 
   MessageSquare, 
   Download, 
@@ -46,16 +47,30 @@ import {
   Copy,
   ExternalLink,
   Printer,
-  BookOpen
+  BookOpen,
+  PanelLeft,
+  PanelRight,
+  X,
+  Package,
+  ListTodo,
+  Terminal,
+  Cable,
+  ClipboardList,
+  ShoppingCart,
+  Wand2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { onAuthStateChanged, User } from 'firebase/auth';
+import { Canvas } from '@react-three/fiber';
+import { OrbitControls, Stage, PerspectiveCamera, Environment, Grid } from '@react-three/drei';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
+import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
 import { 
   Select, 
   SelectContent, 
@@ -81,24 +96,99 @@ import {
   consultLaserExpert, 
   analyzeLaserMaterial,
   getSmartSettings,
-  transcribeSpokenPrompt
+  transcribeSpokenPrompt,
+  generateProjectBlueprint
 } from './services/geminiService';
 import { speakText, cancelSpeech } from './services/ttsService';
 import { ACMER_S1_PARAMETERS, ACMER_S1_MANUAL_SUMMARY, PROJECT_TEMPLATES, LaserSettings } from './constants';
 import { auth, loginWithGoogle, logout, FIREBASE_AVAILABLE } from './lib/firebase';
 import { AdvancedEditor } from './components/AdvancedEditor';
-import { PrototypingStudio } from './components/PrototypingStudio';
 import { DocumentationViewer } from './components/DocumentationViewer';
 import { saveProject, getProjects, deleteProject, renameProject, LaserProject } from './services/projectService';
 
+// 3D Preview Component
+const PrototypePreview = ({ type }: { type: string }) => (
+  <mesh castShadow receiveShadow>
+    {type === 'robot' ? (
+      <group>
+        <boxGeometry args={[1, 0.5, 2]} />
+        <meshStandardMaterial color="#3b82f6" metalness={0.8} roughness={0.2} />
+        {[...Array(12)].map((_, i) => (
+          <mesh key={i} position={[i % 2 === 0 ? 0.6 : -0.6, -0.2, (i / 2) * 0.4 - 1.2]}>
+            <boxGeometry args={[0.3, 0.8, 0.1]} />
+            <meshStandardMaterial color="#1e40af" />
+          </mesh>
+        ))}
+      </group>
+    ) : (
+      <sphereGeometry args={[1, 32, 32]} />
+    )}
+    <meshStandardMaterial color="#3b82f6" metalness={0.8} roughness={0.2} />
+  </mesh>
+);
+
+// Interfaces lifted from PrototypingStudio
+interface Part {
+  id: string;
+  name: string;
+  source: string;
+  price: number;
+  speed: string;
+  category: string;
+  specs: string;
+  url: string;
+  fabrication?: string;
+}
+
+interface PrototypeProject {
+  id: string;
+  name: string;
+  description: string;
+  designNotes: string;
+  parts: Part[];
+  openscadCode: string;
+  svgDesign: string;
+  wiringDiagram: string;
+  assemblySteps: string[];
+  code: string;
+  printingFiles: string[];
+  communityRefs: string[];
+  status: 'ideation' | 'generating' | 'ready';
+}
+
+const GENERATION_STAGES = [
+  'Analyzing design requirements...',
+  'Decomposing subsystems...',
+  'Generating 3D parts (OpenSCAD)...',
+  'Creating laser-cut profiles (SVG)...',
+  'Mapping wiring connections...',
+  'Writing control code...',
+  'Compiling bill of materials...',
+  'Blueprint complete!'
+];
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState('engineering');
+  // Layout state
   const [engineeringMode, setEngineeringMode] = useState<'laser' | 'prototype'>('prototype');
   const [designStyle, setDesignStyle] = useState<'minimalist' | 'deconstructivist' | 'classical' | 'organic'>('minimalist');
   const [isAdvisorMuted, setIsAdvisorMuted] = useState(false);
-  const [advisorExpanded, setAdvisorExpanded] = useState(false);
-  const [advisorAutoPrompt, setAdvisorAutoPrompt] = useState('');
+  const [advisorCollapsed, setAdvisorCollapsed] = useState(false);
+  const [propsCollapsed, setPropsCollapsed] = useState(false);
+  const [showLibrary, setShowLibrary] = useState(false);
+  const [showMaintenance, setShowMaintenance] = useState(false);
+  const [showDocs, setShowDocs] = useState(false);
   const [isAdvancedEditorOpen, setIsAdvancedEditorOpen] = useState(false);
+
+  // Lifted prototype generation state (persists across tab switches)
+  const [protoProject, setProtoProject] = useState<PrototypeProject | null>(null);
+  const [isProtoGenerating, setIsProtoGenerating] = useState(false);
+  const [protoGenerationProgress, setProtoGenerationProgress] = useState(0);
+  const [protoPrompt, setProtoPrompt] = useState('');
+  const [activeOutputTab, setActiveOutputTab] = useState('3d');
+  const [activeDesignFileTab, setActiveDesignFileTab] = useState<'openscad' | 'svg' | 'wiring'>('openscad');
+  const [selectedPrinter, setSelectedPrinter] = useState('Saturn 3 Ultra');
+  const [bomSortMode, setBomSortMode] = useState<'fastest' | 'cheapest' | 'none'>('none');
+  const [generationStage, setGenerationStage] = useState('');
   const [materialPresets, setMaterialPresets] = useState<Record<string, LaserSettings>>(ACMER_S1_PARAMETERS);
   const [originalImage, setOriginalImage] = useState<string | null>(null);
   const [processedImage, setProcessedImage] = useState<string | null>(null);
@@ -202,7 +292,7 @@ export default function App() {
     setProcessedImage(project.processedImage);
     setLaserSettings(project.laserSettings);
     setProcOptions(project.procOptions);
-    setActiveTab('design');
+    setEngineeringMode('laser');
     toast.success(`Loaded ${project.name}`);
   };
 
@@ -422,11 +512,81 @@ export default function App() {
   };
 
   const handleBuildBlueprint = (projectDescription: string) => {
-    // Switch to Engineering > Prototype mode 
-    setActiveTab('engineering');
     setEngineeringMode('prototype');
-    setAdvisorAutoPrompt(projectDescription);
+    setProtoPrompt(projectDescription);
+    handleGeneratePrototype(projectDescription);
     toast.success("Blueprint generation triggered from Advisor!");
+  };
+
+  // Sorted parts memo for BOM
+  const sortedParts = useMemo(() => {
+    if (!protoProject) return [];
+    let list = [...protoProject.parts];
+    if (bomSortMode === 'cheapest') list.sort((a, b) => a.price - b.price);
+    else if (bomSortMode === 'fastest') {
+      const w: Record<string, number> = { 'Today': 0, 'Tomorrow': 1, '2-3 Days': 2, '1-Week': 3, '2-Weeks': 4 };
+      list.sort((a, b) => (w[a.speed] || 99) - (w[b.speed] || 99));
+    }
+    return list;
+  }, [protoProject, bomSortMode]);
+
+  // Prototype generation — lifted from PrototypingStudio so it survives tab switches
+  const handleGeneratePrototype = async (overridePrompt?: string) => {
+    const activePrompt = overridePrompt || protoPrompt;
+    if (!activePrompt.trim()) {
+      toast.error("Please describe your prototype idea");
+      return;
+    }
+
+    setIsProtoGenerating(true);
+    setProtoGenerationProgress(10);
+    setGenerationStage(GENERATION_STAGES[0]);
+
+    try {
+      setProtoGenerationProgress(20);
+      let stageIdx = 0;
+      const progressInterval = setInterval(() => {
+        setProtoGenerationProgress(p => Math.min(p + 5, 85));
+        stageIdx = Math.min(stageIdx + 1, GENERATION_STAGES.length - 2);
+        setGenerationStage(GENERATION_STAGES[stageIdx]);
+      }, 2500);
+
+      const data = await generateProjectBlueprint(activePrompt, designStyle, selectedPrinter, '');
+      
+      clearInterval(progressInterval);
+      setProtoGenerationProgress(90);
+      setGenerationStage(GENERATION_STAGES[GENERATION_STAGES.length - 1]);
+      
+      const newProject: PrototypeProject = {
+        id: `proto_${Date.now()}`,
+        name: data.name,
+        description: data.description,
+        designNotes: data.designNotes || '',
+        parts: (data.parts || []).map((p: any) => ({ ...p, id: p.id || Math.random().toString(36).substr(2, 9) })),
+        openscadCode: data.openscadCode || '// No custom 3D parts generated',
+        svgDesign: data.svgDesign || '',
+        wiringDiagram: data.wiringDiagram || 'No electronics in this design',
+        assemblySteps: data.assemblySteps || [],
+        code: data.code,
+        printingFiles: data.printingFiles || [],
+        communityRefs: data.communityRefs || [],
+        status: 'ready'
+      };
+
+      setProtoProject(newProject);
+      setProtoGenerationProgress(100);
+      setActiveOutputTab('bom');
+      toast.success("Blueprint Generated — Design files ready!");
+    } catch (error) {
+      console.error(error);
+      toast.error("Generation failed. Please try again.");
+    } finally {
+      setTimeout(() => {
+        setIsProtoGenerating(false);
+        setProtoGenerationProgress(0);
+        setGenerationStage('');
+      }, 500);
+    }
   };
 
   const handleAnalyzeMaterial = async () => {
@@ -444,7 +604,8 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-transparent text-white font-sans selection:bg-laser-accent selection:text-black">
+    <div className="h-screen flex flex-col overflow-hidden bg-transparent text-white font-sans selection:bg-laser-accent selection:text-black">
+      {/* Advanced Editor Modal */}
       <AnimatePresence>
         {isAdvancedEditorOpen && processedImage && (
           <motion.div 
@@ -454,699 +615,610 @@ export default function App() {
             className="fixed inset-0 z-[100] p-4 md:p-12 flex items-center justify-center bg-black/80 backdrop-blur-xl"
           >
             <div className="w-full h-full max-w-5xl">
-                <AdvancedEditor 
-                    imageUrl={processedImage} 
-                    onCancel={() => setIsAdvancedEditorOpen(false)}
-                    onSave={(newImage: string) => {
-                        setProcessedImage(newImage);
-                        setIsAdvancedEditorOpen(false);
-                        toast.success("Design synth completed");
-                    }}
-                />
+              <AdvancedEditor 
+                imageUrl={processedImage} 
+                onCancel={() => setIsAdvancedEditorOpen(false)}
+                onSave={(newImage: string) => {
+                  setProcessedImage(newImage);
+                  setIsAdvancedEditorOpen(false);
+                  toast.success("Design synth completed");
+                }}
+              />
             </div>
           </motion.div>
         )}
       </AnimatePresence>
-      <header className="px-4 py-2 border-b border-white/5 glass-panel !rounded-none sticky top-0 z-50 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="bg-laser-accent p-1 rounded shadow-[0_0_15px_rgba(0,242,255,0.4)]">
-            <Layers className="text-black w-4 h-4" />
+
+      {/* Library Drawer */}
+      <AnimatePresence>
+        {showLibrary && (
+          <motion.div 
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[80] bg-black/60 backdrop-blur-sm"
+            onClick={() => setShowLibrary(false)}
+          >
+            <motion.div 
+              initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="absolute right-0 top-0 bottom-0 w-full max-w-xl glass-panel !rounded-none border-l border-white/10 overflow-auto"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="p-4 border-b border-white/10 flex items-center justify-between sticky top-0 bg-black/60 backdrop-blur-xl z-10">
+                <h2 className="text-sm font-black uppercase tracking-widest text-white">Project Library</h2>
+                <Button variant="ghost" size="icon" onClick={() => setShowLibrary(false)} className="h-8 w-8 text-white/60 hover:text-white"><X className="w-4 h-4" /></Button>
+              </div>
+              <div className="p-4 grid grid-cols-2 gap-3">
+                <Card 
+                  className="aspect-square border-dashed border-2 border-white/20 glass-panel flex flex-col items-center justify-center text-white/20 hover:text-laser-accent hover:border-laser-accent transition-colors cursor-pointer group"
+                  onClick={() => { setOriginalImage(null); setProcessedImage(null); setDesignPrompt(''); setShowLibrary(false); toast.info("Started new project"); }}
+                >
+                  <div className="bg-white/5 p-4 rounded-full group-hover:bg-laser-accent/10 transition-colors"><Plus className="w-8 h-8 text-white/20 group-hover:text-laser-accent" /></div>
+                  <span className="text-xs font-bold uppercase tracking-widest mt-4">New Project</span>
+                </Card>
+                {isLoadingProjects && <div className="col-span-full flex items-center justify-center py-12"><RefreshCw className="w-8 h-8 animate-spin text-laser-accent" /></div>}
+                {savedProjects.map(project => (
+                  <Card key={project.id} className="group overflow-hidden glass-panel border-white/10 cursor-pointer hover:shadow-cyan-500/10 transition-all relative"
+                    onClick={() => { loadProject(project); setShowLibrary(false); }}>
+                    <div className="absolute top-2 right-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger className="h-7 w-7 bg-black/40 backdrop-blur-md border border-white/10 text-white hover:bg-white/20 rounded flex items-center justify-center p-1" onClick={e => e.stopPropagation()}>
+                          <MoreVertical className="w-4 h-4" />
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent className="glass-panel border-white/10 text-white min-w-40" align="end">
+                          <DropdownMenuItem className="gap-2 focus:bg-white/10 focus:text-laser-accent cursor-pointer" onClick={e => { e.stopPropagation(); loadProject(project); setShowLibrary(false); }}><ChevronRight className="w-3.5 h-3.5" /> Open</DropdownMenuItem>
+                          <DropdownMenuItem className="gap-2 focus:bg-white/10 focus:text-laser-accent cursor-pointer" onClick={e => handleRenameProject(project.id, e)}><Edit2 className="w-3.5 h-3.5" /> Rename</DropdownMenuItem>
+                          <DropdownMenuItem className="gap-2 focus:bg-white/10 focus:text-laser-accent cursor-pointer" onClick={e => handleDuplicateProject(project, e)}><Copy className="w-3.5 h-3.5" /> Duplicate</DropdownMenuItem>
+                          <DropdownMenuSeparator className="bg-white/5" />
+                          <DropdownMenuItem className="gap-2 focus:bg-red-500/20 text-red-300 focus:text-red-200 cursor-pointer" onClick={e => handleDeleteProject(project.id, e)}><Trash2 className="w-3.5 h-3.5" /> Remove</DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                    <div className="aspect-square relative flex items-center justify-center bg-black/20">
+                      <img src={project.processedImage || project.originalImage || ''} alt={project.name} className="object-cover w-full h-full opacity-60 group-hover:opacity-100 transition-opacity" referrerPolicy="no-referrer" />
+                    </div>
+                    <div className="p-3 border-t border-white/10">
+                      <p className="text-xs font-bold uppercase tracking-tight truncate text-white">{project.name}</p>
+                      <p className="text-[10px] text-white/40">Saved {new Date(project.updatedAt?.toMillis ? project.updatedAt.toMillis() : Date.now()).toLocaleDateString()}</p>
+                    </div>
+                  </Card>
+                ))}
+                {/* Templates */}
+                <div className="col-span-full pt-4 pb-2 flex items-center justify-between border-t border-white/5 mt-2">
+                  <h3 className="text-[11px] font-bold uppercase tracking-widest text-white/40">Stock Image Library</h3>
+                  {user && <Button variant="ghost" size="sm" onClick={handleClaimAllTemplates} className="text-[10px] font-bold uppercase text-laser-accent hover:bg-laser-accent/10 h-7"><Plus className="w-3 h-3 mr-1" /> Add All</Button>}
+                </div>
+                {PROJECT_TEMPLATES.map(template => (
+                  <Card key={template.id} className="group overflow-hidden glass-panel border-white/10 cursor-pointer hover:shadow-cyan-500/10 transition-all"
+                    onClick={() => { setOriginalImage(template.image); setShowLibrary(false); toast.info(`Loaded ${template.name}`); }}>
+                    <div className="aspect-square relative flex items-center justify-center bg-black/20">
+                      <img src={template.image} alt={template.name} className="object-cover w-full h-full opacity-60 group-hover:opacity-100 transition-opacity" referrerPolicy="no-referrer" />
+                    </div>
+                    <div className="p-3 border-t border-white/10">
+                      <p className="text-xs font-bold uppercase tracking-tight text-white">{template.name}</p>
+                      <span className="text-[9px] text-white/50">{template.category}</span>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Maintenance Drawer */}
+      <AnimatePresence>
+        {showMaintenance && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[80] bg-black/60 backdrop-blur-sm" onClick={() => setShowMaintenance(false)}>
+            <motion.div initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="absolute right-0 top-0 bottom-0 w-full max-w-lg glass-panel !rounded-none border-l border-white/10 overflow-auto"
+              onClick={e => e.stopPropagation()}>
+              <div className="p-4 border-b border-white/10 flex items-center justify-between sticky top-0 bg-black/60 backdrop-blur-xl z-10">
+                <h2 className="text-sm font-black uppercase tracking-widest text-white">Maintenance</h2>
+                <Button variant="ghost" size="icon" onClick={() => setShowMaintenance(false)} className="h-8 w-8 text-white/60 hover:text-white"><X className="w-4 h-4" /></Button>
+              </div>
+              <div className="p-4"><MaintenanceDashboard /></div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Docs Drawer */}
+      <AnimatePresence>
+        {showDocs && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[80] bg-black/60 backdrop-blur-sm" onClick={() => setShowDocs(false)}>
+            <motion.div initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="absolute right-0 top-0 bottom-0 w-full max-w-2xl glass-panel !rounded-none border-l border-white/10 overflow-auto"
+              onClick={e => e.stopPropagation()}>
+              <div className="p-4 border-b border-white/10 flex items-center justify-between sticky top-0 bg-black/60 backdrop-blur-xl z-10">
+                <h2 className="text-sm font-black uppercase tracking-widest text-white">Documentation</h2>
+                <Button variant="ghost" size="icon" onClick={() => setShowDocs(false)} className="h-8 w-8 text-white/60 hover:text-white"><X className="w-4 h-4" /></Button>
+              </div>
+              <div className="p-4"><DocumentationViewer /></div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ═══════ TOOLBAR ═══════ */}
+      <header className="h-10 shrink-0 px-3 border-b border-white/10 bg-black/40 backdrop-blur-xl flex items-center justify-between z-50">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <div className="bg-laser-accent p-1 rounded shadow-[0_0_15px_rgba(0,242,255,0.4)]">
+              <Layers className="text-black w-3.5 h-3.5" />
+            </div>
+            <div>
+              <h1 className="text-[11px] font-black tracking-tighter leading-none text-white uppercase">SUBSTRATA</h1>
+              <p className="text-[7px] font-bold tracking-[0.15em] text-laser-accent/70 uppercase leading-none">by GANTASMO</p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-sm font-black tracking-tighter leading-none text-white uppercase">SUBSTRATA</h1>
-            <p className="text-[8px] font-bold tracking-[0.2em] text-laser-accent opacity-80 uppercase leading-none mt-0.5">by GANTASMO</p>
+
+          <Separator orientation="vertical" className="h-5 bg-white/10 mx-1" />
+
+          {/* Mode switcher */}
+          <div className="flex bg-white/5 rounded-md border border-white/5 p-0.5">
+            <button onClick={() => setEngineeringMode('prototype')} className={`px-2.5 py-1 text-[9px] font-black uppercase tracking-wider rounded-sm transition-all ${engineeringMode === 'prototype' ? 'bg-blue-600 text-white' : 'text-white/40 hover:text-white/70'}`}>3D Prototype</button>
+            <button onClick={() => setEngineeringMode('laser')} className={`px-2.5 py-1 text-[9px] font-black uppercase tracking-wider rounded-sm transition-all ${engineeringMode === 'laser' ? 'bg-laser-accent text-black' : 'text-white/40 hover:text-white/70'}`}>Laser Studio</button>
+          </div>
+
+          {/* Design style */}
+          <div className="hidden md:flex gap-0.5 ml-2">
+            {(['minimalist', 'deconstructivist', 'classical', 'organic'] as const).map(s => (
+              <button key={s} onClick={() => setDesignStyle(s)}
+                className={`px-2 py-1 text-[8px] font-black uppercase tracking-tight rounded transition-all border ${designStyle === s ? (engineeringMode === 'laser' ? 'bg-laser-accent text-black border-laser-accent' : 'bg-blue-600 text-white border-blue-600') : 'bg-transparent text-white/30 border-transparent hover:text-white/50'}`}>
+                {s}
+              </button>
+            ))}
           </div>
         </div>
-        <div className="flex items-center gap-2">
+
+        <div className="flex items-center gap-1.5">
+          <Button variant="ghost" size="sm" onClick={() => setShowLibrary(true)} className="h-7 text-[9px] font-bold uppercase text-white/50 hover:text-white hover:bg-white/10 gap-1">
+            <Library className="w-3.5 h-3.5" /> Library
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setShowMaintenance(true)} className="h-7 text-[9px] font-bold uppercase text-white/50 hover:text-white hover:bg-white/10 gap-1">
+            <Settings className="w-3.5 h-3.5" /> Maint.
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setShowDocs(true)} className="h-7 text-[9px] font-bold uppercase text-white/50 hover:text-white hover:bg-white/10 gap-1">
+            <BookOpen className="w-3.5 h-3.5" /> Docs
+          </Button>
+          <Separator orientation="vertical" className="h-5 bg-white/10 mx-1" />
+          <Button size="sm" className="accent-btn h-7 text-[9px] shadow-[0_0_12px_rgba(0,242,255,0.2)]" onClick={handleSaveProject}>
+            <Save className="w-3 h-3 mr-1" /> Save
+          </Button>
           {user ? (
-            <div className="flex items-center gap-3">
-              <div className="hidden sm:block text-right">
-                <p className="text-xs font-bold leading-none">{user.displayName}</p>
-                <p className="text-[10px] text-white/60 leading-none mt-1">{user.email}</p>
-              </div>
-              <Button variant="ghost" size="icon" onClick={logout} className="rounded-full overflow-hidden border border-white/10 glass-panel h-8 w-8 hover:bg-white/10">
-                {user.photoURL ? <img src={user.photoURL} alt="Avatar" className="w-full h-full object-cover" /> : <UserIcon className="w-4 h-4" />}
-              </Button>
-            </div>
+            <Button variant="ghost" size="icon" onClick={logout} className="rounded-full overflow-hidden border border-white/10 h-7 w-7 hover:bg-white/10">
+              {user.photoURL ? <img src={user.photoURL} alt="" className="w-full h-full object-cover" /> : <UserIcon className="w-3.5 h-3.5" />}
+            </Button>
           ) : (
-            <Button variant="outline" size="sm" onClick={loginWithGoogle} className="gap-2 border-white/10 glass-panel hover:bg-white/10">
-              <UserIcon className="w-4 h-4" /> Sign In
+            <Button variant="ghost" size="sm" onClick={loginWithGoogle} className="h-7 text-[9px] border border-white/10 text-white/60 hover:text-white gap-1">
+              <UserIcon className="w-3 h-3" /> Sign In
             </Button>
           )}
-          <div className="h-6 w-px bg-white/10 mx-2 hidden sm:block" />
-          <Button 
-            size="sm" 
-            className="accent-btn shadow-[0_0_20px_rgba(0,242,255,0.3)]"
-            onClick={handleSaveProject}
-          >
-            <Save className="w-4 h-4" /> Save Project
-          </Button>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto p-4 grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-4">
-        <div className="space-y-4">
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-            <TabsList className="glass-panel p-0.5 h-9 rounded-lg mb-4 flex border-white/10">
-              <TabsTrigger value="engineering" className="px-4 rounded-lg data-[state=active]:bg-white/10 data-[state=active]:text-laser-accent data-[state=active]:shadow-inner text-white/70 text-xs">
-                <Cpu className="w-3.5 h-3.5 mr-1.5" /> Engineering
-              </TabsTrigger>
-              <TabsTrigger value="maintenance" className="px-4 rounded-lg data-[state=active]:bg-white/10 data-[state=active]:text-laser-accent data-[state=active]:shadow-inner text-white/70 text-xs">
-                <Settings className="w-3.5 h-3.5 mr-1.5" /> Maintenance
-              </TabsTrigger>
-              <TabsTrigger value="library" className="px-4 rounded-lg data-[state=active]:bg-white/10 data-[state=active]:text-laser-accent data-[state=active]:shadow-inner text-white/70 text-xs">
-                <Library className="w-3.5 h-3.5 mr-1.5" /> Library
-              </TabsTrigger>
-              <TabsTrigger value="docs" className="px-4 rounded-lg data-[state=active]:bg-white/10 data-[state=active]:text-laser-accent data-[state=active]:shadow-inner text-white/70 text-xs">
-                <BookOpen className="w-3.5 h-3.5 mr-1.5" /> Docs
-              </TabsTrigger>
-            </TabsList>
+      {/* ═══════ MAIN CONTENT ═══════ */}
+      <div className="flex-1 flex overflow-hidden">
 
-            <TabsContent value="engineering" className="m-0 focus-visible:outline-none">
-              <Tabs value={engineeringMode} onValueChange={(v: any) => setEngineeringMode(v)} className="w-full">
-                <div className="flex items-center justify-between mb-4 px-1">
-                   <TabsList className="bg-white/5 p-1 h-8 border border-white/5 rounded-md">
-                     <TabsTrigger value="prototype" className="px-3 h-6 text-[10px] uppercase font-bold tracking-wider data-[state=active]:bg-blue-600 data-[state=active]:text-white">3D Prototype</TabsTrigger>
-                     <TabsTrigger value="laser" className="px-3 h-6 text-[10px] uppercase font-bold tracking-wider data-[state=active]:bg-laser-accent data-[state=active]:text-black">Laser Studio</TabsTrigger>
-                   </TabsList>
-                   
-                   <div className="flex gap-1">
-                      {['minimalist', 'deconstructivist', 'classical', 'organic'].map((s) => (
-                        <button 
-                          key={s}
-                          onClick={() => setDesignStyle(s as any)}
-                          className={`px-2.5 py-1 rounded text-[9px] font-black uppercase tracking-tighter transition-all border ${designStyle === s ? (engineeringMode === 'laser' ? 'bg-laser-accent text-black border-laser-accent' : 'bg-blue-600 text-white border-blue-600') : 'bg-white/5 text-white/40 border-white/10 hover:border-white/20'}`}
-                        >
-                          {s}
-                        </button>
-                      ))}
-                   </div>
+        {/* ─── LEFT: Advisor Panel ─── */}
+        <div className={`shrink-0 border-r border-white/10 bg-black/20 flex flex-col transition-all duration-300 ${advisorCollapsed ? 'w-0 overflow-hidden' : 'w-[300px]'}`}>
+          <ConsultantInterface
+            isMuted={isAdvisorMuted}
+            onToggleMute={() => setIsAdvisorMuted(!isAdvisorMuted)}
+            onSavePreset={handleSaveMaterialPreset}
+            onBuildBlueprint={handleBuildBlueprint}
+          />
+        </div>
+        {/* Advisor toggle (always visible) */}
+        <button onClick={() => setAdvisorCollapsed(!advisorCollapsed)}
+          className="shrink-0 w-5 flex items-center justify-center border-r border-white/5 bg-black/20 hover:bg-white/5 transition-colors text-white/30 hover:text-white/60">
+          <PanelLeft className={`w-3 h-3 transition-transform ${advisorCollapsed ? 'rotate-180' : ''}`} />
+        </button>
+
+        {/* ─── CENTER: Viewport + Output Tabs ─── */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+
+          {/* Main Viewport Area */}
+          <div className="flex-1 relative overflow-hidden">
+            {/* Laser Studio viewport */}
+            <div className={`absolute inset-0 ${engineeringMode === 'laser' ? '' : 'hidden'}`}>
+              <div className="h-full flex flex-col">
+                {/* Laser viewport */}
+                <div className="flex-1 relative flex items-center justify-center bg-black/20 group">
+                  {processedImage ? (
+                    <div className="relative w-full h-full flex items-center justify-center p-4">
+                      <img src={processedImage} alt="Processed" className="max-w-full max-h-full shadow-2xl rounded-sm pixelated border border-white/20"
+                        style={{ imageRendering: procOptions.dither ? 'pixelated' : 'auto' }} />
+                      <div className="absolute top-3 right-3 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Button size="sm" variant="secondary" onClick={() => setIsAdvancedEditorOpen(true)} className="bg-laser-accent/90 text-black hover:bg-laser-accent font-bold h-7 text-[10px]">
+                          <Edit2 className="w-3 h-3 mr-1" /> Studio
+                        </Button>
+                        <Button size="icon" variant="secondary" className="glass-panel h-7 w-7 hover:bg-white/20 text-laser-accent" onClick={handleExportRaster} title="Export PNG"><FileImage className="w-3 h-3" /></Button>
+                        <Button size="icon" variant="secondary" className="glass-panel h-7 w-7 hover:bg-white/20 text-laser-accent" onClick={handleExportVector} title="Export SVG"><FileCode className="w-3 h-3" /></Button>
+                        <Button size="icon" variant="secondary" className="glass-panel h-7 w-7 hover:bg-white/20" onClick={() => { setOriginalImage(null); setProcessedImage(null); }}><Trash2 className="w-3 h-3 text-red-400" /></Button>
+                        <Button size="icon" variant="secondary" className="glass-panel h-7 w-7 hover:bg-white/20" onClick={handleAnalyzeMaterial} disabled={isAnalyzing}>
+                          {isAnalyzing ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3 text-laser-accent" />}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-center space-y-3">
+                      <div className="mx-auto w-14 h-14 bg-white/5 border border-dashed border-white/20 rounded-2xl flex items-center justify-center text-white/20">
+                        <ImageIcon className="w-7 h-7" />
+                      </div>
+                      <p className="text-sm font-medium text-white">Import your design</p>
+                      <p className="text-xs text-white/40">JSON, SVG, PNG or JPEG up to 10MB</p>
+                      <div className="flex gap-2 justify-center">
+                        <Button variant="outline" className="relative group overflow-hidden border-white/20 glass-panel hover:bg-white/10 text-white text-xs h-8">
+                          <input type="file" className="absolute inset-0 opacity-0 cursor-pointer" onChange={handleFileUpload} accept="image/*" />
+                          <Upload className="w-3 h-3 mr-1" /> Upload
+                        </Button>
+                        <Button onClick={() => setEngineeringMode('laser')} className="accent-btn gap-1 text-xs h-8">
+                          <Sparkles className="w-3 h-3" /> AI Generate
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                  {(isProcessing || isAnalyzing) && (
+                    <div className="absolute inset-0 glass-panel bg-black/40 backdrop-blur-md flex items-center justify-center z-10 rounded-sm">
+                      <RefreshCw className="w-8 h-8 animate-spin text-laser-accent" />
+                    </div>
+                  )}
                 </div>
-
-                <TabsContent value="laser" className="m-0 animate-in fade-in slide-in-from-left-2 duration-300">
-                  <div className="grid gap-4">
-                    <Card className="glass-panel overflow-hidden border-white/10">
-                      <div className="p-4 py-4 aspect-square max-h-[480px] relative flex items-center justify-center bg-black/20 group">
-                        {processedImage ? (
-                          <div className="relative w-full h-full flex items-center justify-center">
-                            <img 
-                              src={processedImage} 
-                              alt="Processed" 
-                              className="max-w-full max-h-full shadow-2xl rounded-sm pixelated border border-white/20" 
-                              style={{ imageRendering: procOptions.dither ? 'pixelated' : 'auto' }}
-                            />
-                            <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <Button 
-                                size="sm" 
-                                variant="secondary"
-                                onClick={() => setIsAdvancedEditorOpen(true)}
-                                className="bg-laser-accent/90 text-black hover:bg-laser-accent font-bold"
-                              >
-                                <Edit2 className="w-4 h-4 mr-1" /> Open Studio
-                              </Button>
-                              <Button 
-                                size="icon" 
-                                variant="secondary" 
-                                className="glass-panel h-8 w-8 hover:bg-white/20 text-laser-accent"
-                                onClick={handleExportRaster}
-                                title="Export PNG"
-                              >
-                                <FileImage className="w-4 h-4" />
-                              </Button>
-                                  <Button 
-                                    size="icon" 
-                                    variant="secondary" 
-                                    className="glass-panel h-8 w-8 hover:bg-white/20 text-laser-accent"
-                                    onClick={handleExportVector}
-                                    title="Export SVG"
-                                  >
-                                    <FileCode className="w-4 h-4" />
-                                  </Button>
-                              <Button 
-                                size="icon" 
-                                variant="secondary" 
-                                className="glass-panel h-8 w-8 hover:bg-white/20"
-                                onClick={() => { setOriginalImage(null); setProcessedImage(null); }}
-                              >
-                                <Trash2 className="w-4 h-4 text-red-400" />
-                              </Button>
-                              <Button 
-                                size="icon" 
-                                variant="secondary" 
-                                className="glass-panel h-8 w-8 hover:bg-white/20"
-                                onClick={handleAnalyzeMaterial}
-                                disabled={isAnalyzing}
-                              >
-                                {isAnalyzing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4 text-laser-accent" />}
-                              </Button>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="text-center space-y-4">
-                            <div className="mx-auto w-16 h-16 bg-white/5 border border-dashed border-white/20 rounded-2xl flex items-center justify-center text-white/20">
-                              <ImageIcon className="w-8 h-8" />
-                            </div>
-                            <div>
-                              <p className="text-sm font-medium text-white">Import your design</p>
-                              <p className="text-xs text-white/40">JSON, SVG, PNG or JPEG up to 10MB</p>
-                            </div>
-                            <div className="flex gap-2 justify-center">
-                              <Button variant="outline" className="relative group overflow-hidden border-white/20 glass-panel hover:bg-white/10 text-white">
-                                <input 
-                                  type="file" 
-                                  className="absolute inset-0 opacity-0 cursor-pointer" 
-                                  onChange={handleFileUpload}
-                                  accept="image/*"
-                                />
-                                <Upload className="w-4 h-4 mr-2" /> Upload Image
-                              </Button>
-                               <Button 
-                                onClick={() => setEngineeringMode('laser')} 
-                                className="accent-btn gap-2"
-                              >
-                                <Sparkles className="w-4 h-4" /> AI Generate
-                              </Button>
-                            </div>
-                          </div>
-                        )}
-                        {(isProcessing || isAnalyzing) && (
-                          <div className="absolute inset-0 glass-panel bg-black/40 backdrop-blur-md flex items-center justify-center z-10 rounded-sm">
-                            <RefreshCw className="w-8 h-8 animate-spin text-laser-accent" />
-                          </div>
-                        )}
-                      </div>
-                    </Card>
-
-                    <div className="grid gap-4">
-                      <div className="flex items-center gap-2">
-                        <Sparkles className="w-5 h-5 text-laser-accent" />
-                        <h3 className="text-sm font-black uppercase tracking-[0.2em] text-white">Generative Synthesis <span className="text-laser-accent/50 ml-2">[{designStyle}]</span></h3>
-                      </div>
-                      <div className="flex gap-2">
-                        <div className="relative flex-1">
-                          <Input 
-                            placeholder={`e.g. A ${designStyle} wolf head stencil...`} 
-                            className="glass-input h-14 pr-24 shadow-inner text-base border-white/10"
-                            value={designPrompt}
-                            onChange={(e) => setDesignPrompt(e.target.value)}
-                            onKeyDown={(e) => e.key === 'Enter' && handleGenerate()}
-                          />
-                          <div className="absolute right-2 top-2 flex gap-1">
-                            <Button
-                               size="icon"
-                               variant="ghost"
-                               className={`h-10 w-10 transition-colors ${isTranscribing ? 'text-red-400 bg-red-500/10' : 'text-white/40'}`}
-                               onMouseDown={startRecording}
-                               onMouseUp={stopRecording}
-                               onTouchStart={startRecording}
-                               onTouchEnd={stopRecording}
-                            >
-                               {isTranscribing ? <Mic className="w-5 h-5 animate-pulse" /> : <Mic className="w-5 h-5" />}
-                            </Button>
-                            <Button 
-                               size="icon"
-                               className="h-10 w-10 accent-btn"
-                               onClick={handleGenerate}
-                               disabled={isGenerating || !designPrompt}
-                            >
-                               {isGenerating ? <RefreshCw className="w-5 h-5 animate-spin" /> : <ChevronRight className="w-5 h-5" />}
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                       <div className="flex flex-wrap gap-2">
-                         <p className="text-xs text-white/40 mt-1 pr-2">Quick presets:</p>
-                        {['Tribal Mask', 'Sacred Geometry', 'Minimalist Cat', 'Floral Frame'].map(p => (
-                          <button 
-                            key={p} 
-                            onClick={() => setDesignPrompt(p)}
-                            className="text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 glass-panel border-white/10 text-white/70 hover:border-laser-accent hover:text-laser-accent transition-colors"
-                          >
-                            {p}
-                          </button>
-                        ))}
+                {/* Laser prompt bar */}
+                <div className="p-3 border-t border-white/10 bg-black/30">
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <Input placeholder={`e.g. A ${designStyle} wolf head stencil...`} className="glass-input h-10 pr-20 text-sm border-white/10"
+                        value={designPrompt} onChange={e => setDesignPrompt(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleGenerate()} />
+                      <div className="absolute right-1 top-1 flex gap-1">
+                        <Button size="icon" variant="ghost" className={`h-8 w-8 transition-colors ${isTranscribing ? 'text-red-400 bg-red-500/10' : 'text-white/40'}`}
+                          onMouseDown={startRecording} onMouseUp={stopRecording} onTouchStart={startRecording} onTouchEnd={stopRecording}>
+                          {isTranscribing ? <Mic className="w-4 h-4 animate-pulse" /> : <Mic className="w-4 h-4" />}
+                        </Button>
+                        <Button size="icon" className="h-8 w-8 accent-btn" onClick={handleGenerate} disabled={isGenerating || !designPrompt}>
+                          {isGenerating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ChevronRight className="w-4 h-4" />}
+                        </Button>
                       </div>
                     </div>
                   </div>
-                </TabsContent>
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    <p className="text-[9px] text-white/30 mt-0.5 pr-1">Presets:</p>
+                    {['Tribal Mask', 'Sacred Geometry', 'Minimalist Cat', 'Floral Frame'].map(p => (
+                      <button key={p} onClick={() => setDesignPrompt(p)} className="text-[9px] font-bold uppercase tracking-widest px-2 py-1 glass-panel border-white/10 text-white/60 hover:border-laser-accent hover:text-laser-accent transition-colors">{p}</button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
 
-                <TabsContent value="prototype" className="m-0 h-[720px] animate-in fade-in slide-in-from-right-2 duration-300 overflow-hidden">
-                  <PrototypingStudio designStyle={designStyle} autoPrompt={advisorAutoPrompt} />
-                </TabsContent>
-              </Tabs>
-            </TabsContent>
+            {/* 3D Prototype viewport (always mounted, hidden when not active) */}
+            <div className={`absolute inset-0 ${engineeringMode === 'prototype' ? '' : 'hidden'}`}>
+              <div className="h-full bg-slate-950">
+                <Canvas shadows>
+                  <PerspectiveCamera makeDefault position={[5, 5, 5]} />
+                  <OrbitControls makeDefault minPolarAngle={0} maxPolarAngle={Math.PI / 1.75} />
+                  <Suspense fallback={null}>
+                    <Stage environment="city" intensity={0.5}>
+                      <PrototypePreview type={protoProject ? 'robot' : 'sphere'} />
+                    </Stage>
+                    <Environment preset="city" />
+                  </Suspense>
+                  <Grid infiniteGrid fadeDistance={30} fadeStrength={5} sectionSize={1.5} sectionColor="#3b82f6" sectionThickness={1.5} cellColor="#1e293b" />
+                </Canvas>
 
-            <TabsContent value="maintenance" className="m-0">
-               <MaintenanceDashboard />
-            </TabsContent>
+                {/* 3D overlay controls */}
+                <div className="absolute bottom-3 left-3 flex gap-2">
+                  <Card className="bg-black/80 backdrop-blur-md border border-white/10 p-1.5 flex gap-1">
+                    <Button size="icon" variant="ghost" className="h-7 w-7 text-white/60 hover:text-white"><Layers className="w-3.5 h-3.5" /></Button>
+                    <Button size="icon" variant="ghost" className="h-7 w-7 text-white/60 hover:text-white"><Settings2 className="w-3.5 h-3.5" /></Button>
+                    <Separator orientation="vertical" className="h-7 bg-white/10" />
+                    <Button size="icon" variant="ghost" className="h-7 w-7 text-blue-400 hover:text-blue-300"><Printer className="w-3.5 h-3.5" /></Button>
+                  </Card>
+                </div>
 
-            <TabsContent value="library" className="m-0">
-               <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-                   <Card 
-                    className="aspect-square border-dashed border-2 border-white/20 glass-panel flex flex-col items-center justify-center text-white/20 hover:text-laser-accent hover:border-laser-accent transition-colors cursor-pointer group"
-                    onClick={() => {
-                      setOriginalImage(null);
-                      setProcessedImage(null);
-                      setDesignPrompt('');
-                      setActiveTab('design');
-                      toast.info("Started new project");
-                    }}
-                   >
-                      <div className="bg-white/5 p-4 rounded-full group-hover:bg-laser-accent/10 transition-colors">
-                        <Plus className="w-8 h-8 text-white/20 group-hover:text-laser-accent" />
-                      </div>
-                      <span className="text-xs font-bold uppercase tracking-widest mt-4">New Project</span>
-                   </Card>
-
-                   {/* User Saved Projects */}
-                   {isLoadingProjects && (
-                     <div className="col-span-full flex items-center justify-center py-12">
-                       <RefreshCw className="w-8 h-8 animate-spin text-laser-accent" />
-                     </div>
-                   )}
-
-                   {savedProjects.map(project => (
-                     <Card 
-                        key={project.id} 
-                        className="group overflow-hidden glass-panel border-white/10 cursor-pointer hover:shadow-cyan-500/10 transition-all relative"
-                        onClick={() => loadProject(project)}
-                     >
-                        <div className="absolute top-2 right-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <DropdownMenu>
-                              <DropdownMenuTrigger
-                                className="h-7 w-7 bg-black/40 backdrop-blur-md border border-white/10 text-white hover:bg-white/20 rounded flex items-center justify-center p-1"
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                <MoreVertical className="w-4 h-4" />
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent className="glass-panel border-white/10 text-white min-w-40" align="end">
-                                <DropdownMenuItem className="gap-2 focus:bg-white/10 focus:text-laser-accent cursor-pointer" onClick={(e) => { e.stopPropagation(); loadProject(project); }}>
-                                  <ChevronRight className="w-3.5 h-3.5" /> Open Project
-                                </DropdownMenuItem>
-                                <DropdownMenuItem className="gap-2 focus:bg-white/10 focus:text-laser-accent cursor-pointer" onClick={(e) => handleRenameProject(project.id, e)}>
-                                  <Edit2 className="w-3.5 h-3.5" /> Rename
-                                </DropdownMenuItem>
-                                <DropdownMenuItem className="gap-2 focus:bg-white/10 focus:text-laser-accent cursor-pointer" onClick={(e) => handleDuplicateProject(project, e)}>
-                                  <Copy className="w-3.5 h-3.5" /> Duplicate
-                                </DropdownMenuItem>
-                                <DropdownMenuItem className="gap-2 focus:bg-white/10 focus:text-laser-accent cursor-pointer" onClick={(e) => handleShareProject(project, e)}>
-                                  <ExternalLink className="w-3.5 h-3.5" /> Share Data
-                                </DropdownMenuItem>
-                                <DropdownMenuSeparator className="bg-white/5" />
-                                <DropdownMenuItem className="gap-2 focus:bg-red-500/20 text-red-300 focus:text-red-200 cursor-pointer" onClick={(e) => handleDeleteProject(project.id, e)}>
-                                  <Trash2 className="w-3.5 h-3.5" /> Remove
-                                </DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                        </div>
-                        <div className="aspect-square relative flex items-center justify-center bg-black/20">
-                           <img 
-                            src={project.processedImage || project.originalImage || ''} 
-                            alt={project.name} 
-                            className="object-cover w-full h-full opacity-60 group-hover:opacity-100 transition-opacity" 
-                            referrerPolicy="no-referrer" 
-                          />
-                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                              <Button variant="secondary" size="sm" className="bg-white/90 text-black font-bold h-8 px-4 rounded-full">Open Project</Button>
-                           </div>
-                        </div>
-                        <div className="p-4 border-t border-white/10">
-                           <div className="flex justify-between items-center mb-1">
-                              <p className="text-xs font-bold uppercase tracking-tight truncate flex-1 mr-2 text-white">{project.name}</p>
-                              <div className="bg-laser-accent w-1.5 h-1.5 rounded-full shadow-[0_0_5px_#00f2ff]" title="My Project" />
-                           </div>
-                           <p className="text-[10px] text-white/40">Saved {new Date(project.updatedAt?.toMillis ? project.updatedAt.toMillis() : Date.now()).toLocaleDateString()}</p>
-                        </div>
-                     </Card>
-                   ))}
-
-                    {/* Templates Section */}
-                    <div className="col-span-full pt-4 pb-2 flex items-center justify-between border-t border-white/5 mt-2">
-                       <h3 className="text-[11px] font-bold uppercase tracking-widest text-white/40">Stock Image Library</h3>
-                      {user && (
-                        <Button 
-                          variant="ghost" 
-                          size="sm" 
-                          onClick={handleClaimAllTemplates}
-                          className="text-[10px] font-bold uppercase text-laser-accent hover:bg-laser-accent/10 h-7"
-                        >
-                          <Plus className="w-3 h-3 mr-1" /> Add All to My Library
-                        </Button>
-                      )}
+                {!protoProject && !isProtoGenerating && (
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <div className="max-w-sm text-center p-6 bg-black/40 backdrop-blur-md border border-white/10 rounded-2xl">
+                      <Box className="w-10 h-10 text-white/10 mx-auto mb-3" />
+                      <h3 className="text-white/40 font-bold uppercase tracking-widest text-sm">Awaiting Generator</h3>
+                      <p className="text-white/20 text-xs mt-1">Describe your vision in the advisor panel</p>
                     </div>
+                  </div>
+                )}
 
-                   {PROJECT_TEMPLATES.map(template => (
-                     <Card 
-                        key={template.id} 
-                        className="group overflow-hidden glass-panel border-white/10 cursor-pointer hover:shadow-cyan-500/10 transition-all"
-                        onClick={() => {
-                          setOriginalImage(template.image);
-                          setActiveTab('design');
-                          toast.info(`Loaded ${template.name} template`);
-                        }}
-                     >
-                        <div className="aspect-square relative flex items-center justify-center bg-black/20">
-                           <img src={template.image} alt={template.name} className="object-cover w-full h-full opacity-60 group-hover:opacity-100 transition-opacity" referrerPolicy="no-referrer" />
-                           <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                              <Button variant="secondary" size="sm" className="bg-white/90 text-black font-bold">Use Template</Button>
-                           </div>
-                        </div>
-                        <div className="p-4 border-t border-white/10">
-                           <div className="flex justify-between items-center mb-1">
-                              <p className="text-xs font-bold uppercase tracking-tight text-white">{template.name}</p>
-                              <span className="text-[9px] bg-white/5 px-1.5 py-0.5 rounded border border-white/10 text-white/50">{template.category}</span>
-                           </div>
-                           <p className="text-[10px] text-white/40">Click to import and customize</p>
-                        </div>
-                     </Card>
-                   ))}
-               </div>
-            </TabsContent>
+                {/* Generation progress overlay */}
+                {isProtoGenerating && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/30 backdrop-blur-sm">
+                    <div className="max-w-sm text-center p-6 bg-black/60 backdrop-blur-md border border-blue-500/30 rounded-2xl space-y-3">
+                      <RefreshCw className="w-8 h-8 text-blue-400 animate-spin mx-auto" />
+                      <p className="text-sm font-bold text-white uppercase tracking-widest">Synthesizing Blueprint</p>
+                      <p className="text-xs text-blue-300 font-mono">{generationStage}</p>
+                      <Progress value={protoGenerationProgress} className="h-1.5 bg-white/5" />
+                      <p className="text-[10px] text-white/40 font-mono">{protoGenerationProgress}%</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
 
-            <TabsContent value="docs" className="m-0">
-              <DocumentationViewer />
-            </TabsContent>
-          </Tabs>
+          {/* ─── BOTTOM: Output Tabs (progressive reveal) ─── */}
+          <div className="shrink-0 border-t border-white/10 bg-black/30">
+            {/* Tab bar */}
+            <div className="h-9 px-3 flex items-center gap-1 border-b border-white/5 overflow-x-auto">
+              {[
+                { id: '3d', label: '3D Workspace', icon: Box, ready: true },
+                { id: 'bom', label: 'Bill of Materials', icon: ListTodo, ready: !!protoProject },
+                { id: 'fabrication', label: 'Design Files', icon: FileCode, ready: !!protoProject },
+                { id: 'code', label: 'Control Code', icon: Terminal, ready: !!protoProject },
+                { id: 'assembly', label: 'Assembly', icon: ClipboardList, ready: !!(protoProject && protoProject.assemblySteps.length > 0) },
+              ].map(tab => (
+                <button key={tab.id} onClick={() => tab.ready && setActiveOutputTab(tab.id)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-[9px] font-bold uppercase tracking-widest rounded-t transition-all whitespace-nowrap
+                    ${activeOutputTab === tab.id ? 'bg-white/10 text-blue-400 border-b-2 border-blue-400' : tab.ready ? 'text-white/40 hover:text-white/60 hover:bg-white/5' : 'text-white/15 cursor-not-allowed'}`}>
+                  <tab.icon className="w-3 h-3" />
+                  {tab.label}
+                  {isProtoGenerating && !tab.ready && <RefreshCw className="w-2.5 h-2.5 animate-spin ml-1" />}
+                </button>
+              ))}
+              <div className="flex-1" />
+              {protoProject && (
+                <Button size="sm" className="h-6 text-[9px] bg-blue-600 hover:bg-blue-500 text-white">
+                  <ShoppingCart className="w-3 h-3 mr-1" /> Export All
+                </Button>
+              )}
+            </div>
+            {/* Tab content (compact bottom panel) */}
+            <div className={`overflow-auto transition-all ${activeOutputTab === '3d' ? 'h-0' : 'h-56'}`}>
+              {activeOutputTab === 'bom' && (
+                <div className="p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-bold text-white/60">Sourcing — {sortedParts.length} parts</p>
+                    <div className="flex gap-1">
+                      <Button size="sm" variant={bomSortMode === 'fastest' ? 'default' : 'outline'} className={`h-5 text-[8px] ${bomSortMode === 'fastest' ? 'bg-blue-600' : 'bg-white/5 border-white/10 text-white/60'}`}
+                        onClick={() => setBomSortMode(bomSortMode === 'fastest' ? 'none' : 'fastest')}>FASTEST</Button>
+                      <Button size="sm" variant={bomSortMode === 'cheapest' ? 'default' : 'outline'} className={`h-5 text-[8px] ${bomSortMode === 'cheapest' ? 'bg-blue-600' : 'bg-white/5 border-white/10 text-white/60'}`}
+                        onClick={() => setBomSortMode(bomSortMode === 'cheapest' ? 'none' : 'cheapest')}>CHEAPEST</Button>
+                    </div>
+                  </div>
+                  {sortedParts.map(part => (
+                    <div key={part.id} className="flex items-center justify-between px-3 py-2 bg-white/5 rounded-lg border border-white/5 hover:bg-white/10 transition-colors">
+                      <div className="flex items-center gap-3">
+                        <Package className="w-4 h-4 text-blue-400 shrink-0" />
+                        <div>
+                          <p className="text-xs font-bold text-white">{part.name}</p>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <Badge variant="secondary" className="bg-blue-500/10 text-blue-400 text-[8px] px-1 py-0">{part.source}</Badge>
+                            <span className="text-[9px] text-white/40 font-mono">{part.specs}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xs font-mono text-white">${part.price.toFixed(2)}</p>
+                        <p className="text-[9px] text-green-400 font-bold">{part.speed}</p>
+                      </div>
+                    </div>
+                  ))}
+                  {!protoProject && <p className="text-center py-8 text-white/20 text-xs font-mono tracking-widest">NO PARTS GENERATED YET</p>}
+                </div>
+              )}
+
+              {activeOutputTab === 'fabrication' && (
+                <div className="h-full flex flex-col">
+                  <div className="px-3 py-1.5 flex gap-1.5 border-b border-white/5">
+                    <Button size="sm" variant={activeDesignFileTab === 'openscad' ? 'default' : 'ghost'} className={`h-6 text-[8px] uppercase tracking-widest font-bold ${activeDesignFileTab === 'openscad' ? 'bg-blue-600 text-white' : 'text-white/40'}`}
+                      onClick={() => setActiveDesignFileTab('openscad')}><Box className="w-3 h-3 mr-1" /> OpenSCAD</Button>
+                    <Button size="sm" variant={activeDesignFileTab === 'svg' ? 'default' : 'ghost'} className={`h-6 text-[8px] uppercase tracking-widest font-bold ${activeDesignFileTab === 'svg' ? 'bg-green-600 text-white' : 'text-white/40'}`}
+                      onClick={() => setActiveDesignFileTab('svg')}><Scissors className="w-3 h-3 mr-1" /> SVG</Button>
+                    <Button size="sm" variant={activeDesignFileTab === 'wiring' ? 'default' : 'ghost'} className={`h-6 text-[8px] uppercase tracking-widest font-bold ${activeDesignFileTab === 'wiring' ? 'bg-yellow-600 text-white' : 'text-white/40'}`}
+                      onClick={() => setActiveDesignFileTab('wiring')}><Cable className="w-3 h-3 mr-1" /> Wiring</Button>
+                    <div className="flex-1" />
+                    {protoProject && <Button size="sm" variant="outline" className="h-6 text-[8px] bg-white/5 border-white/10 text-white/60"
+                      onClick={() => {
+                        const c = activeDesignFileTab === 'openscad' ? protoProject.openscadCode : activeDesignFileTab === 'svg' ? protoProject.svgDesign : protoProject.wiringDiagram;
+                        navigator.clipboard.writeText(c); toast.success('Copied!');
+                      }}><Copy className="w-3 h-3 mr-1" /> Copy</Button>}
+                  </div>
+                  <pre className="flex-1 p-3 text-xs font-mono overflow-auto whitespace-pre-wrap" style={{ color: activeDesignFileTab === 'openscad' ? '#93c5fd' : activeDesignFileTab === 'svg' ? '#86efac' : '#fde68a' }}>
+                    {activeDesignFileTab === 'openscad' && (protoProject?.openscadCode || '// Generate a blueprint to see OpenSCAD code')}
+                    {activeDesignFileTab === 'svg' && (protoProject?.svgDesign || '<!-- Generate a blueprint to see SVG paths -->')}
+                    {activeDesignFileTab === 'wiring' && (protoProject?.wiringDiagram || '# Generate a blueprint to see wiring diagram')}
+                  </pre>
+                </div>
+              )}
+
+              {activeOutputTab === 'code' && (
+                <div className="h-full flex flex-col">
+                  <div className="flex items-center justify-between px-3 py-1.5 border-b border-white/5">
+                    <div className="flex items-center gap-2"><Terminal className="w-3.5 h-3.5 text-blue-400" /><span className="text-[10px] text-white/60 font-mono">main_control.py</span></div>
+                    <Button size="sm" variant="ghost" className="h-6 text-[9px] text-white/40 hover:text-white"
+                      onClick={() => { if (protoProject?.code) { navigator.clipboard.writeText(protoProject.code); toast.success('Copied!'); } }}><Copy className="w-3 h-3 mr-1" /> Copy</Button>
+                  </div>
+                  <pre className="flex-1 p-3 text-blue-300 font-mono text-xs overflow-auto">{protoProject?.code || "# Awaiting project generation..."}</pre>
+                </div>
+              )}
+
+              {activeOutputTab === 'assembly' && protoProject && (
+                <div className="p-3 space-y-1.5">
+                  <div className="flex items-center gap-2 mb-2"><ClipboardList className="w-3.5 h-3.5 text-purple-400" /><span className="text-[10px] font-bold text-white/60 uppercase tracking-widest">Assembly Steps</span></div>
+                  {protoProject.assemblySteps.map((step, idx) => (
+                    <div key={idx} className="flex gap-3 text-xs">
+                      <span className="text-purple-400 font-mono font-bold w-5 shrink-0">{String(idx + 1).padStart(2, '0')}</span>
+                      <span className="text-white/70">{step}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
-        <aside className="space-y-6">
-          {engineeringMode === 'laser' ? (
-            <>
-              <section className="space-y-3">
-                <div className="flex items-center justify-between px-1">
-                  <div className="flex items-center gap-2">
-                    <Settings className="w-4 h-4 text-white/40" />
-                    <h3 className="font-semibold tracking-tight uppercase text-[10px] text-white/60">Laser Parameters</h3>
-                  </div>
-                </div>
+        {/* Props panel toggle */}
+        <button onClick={() => setPropsCollapsed(!propsCollapsed)}
+          className="shrink-0 w-5 flex items-center justify-center border-l border-white/5 bg-black/20 hover:bg-white/5 transition-colors text-white/30 hover:text-white/60">
+          <PanelRight className={`w-3 h-3 transition-transform ${propsCollapsed ? 'rotate-180' : ''}`} />
+        </button>
 
-                <div className="p-2.5 glass-panel border-white/10 space-y-3">
-                  <div className="space-y-1.5">
-                    <Label className="text-[10px] font-bold uppercase tracking-widest text-white/40">Smart Presets</Label>
-                    <Select onValueChange={applySmartSettings}>
-                      <SelectTrigger className="glass-input border-white/10 bg-black/20 h-9 text-xs">
-                        <SelectValue placeholder="Select Material" />
-                      </SelectTrigger>
-                      <SelectContent className="glass-panel border-white/20">
-                        {Object.keys(materialPresets).map(mat => (
-                          <SelectItem key={mat} value={mat} className="text-xs text-white hover:bg-white/10">{mat}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="space-y-3">
-                    <div className="space-y-1">
-                        <div className="flex justify-between items-center text-[11px] font-medium">
-                            <Label className="text-white/70">Power Output</Label>
-                            <span className="bg-laser-accent/10 text-laser-accent px-1.5 py-0.5 rounded font-bold border border-laser-accent/20">{laserSettings.power}%</span>
-                        </div>
-                        <Slider 
-                            value={[laserSettings.power]} 
-                            onValueChange={(val: any) => {
-                              const value = Array.isArray(val) ? val[0] : val;
-                              setLaserSettings(s => ({...s, power: Number(value) || 0}));
-                            }}
-                            max={100} 
-                            step={1} 
-                            className="py-2 cyan-slider"
-                        />
-                    </div>
-
-                    <div className="space-y-1">
-                        <div className="flex justify-between items-center text-[11px] font-medium">
-                            <Label className="text-white/70">Speed</Label>
-                            <span className="bg-laser-accent/10 text-laser-accent px-1.5 py-0.5 rounded font-bold border border-laser-accent/20">{laserSettings.speed} mm/min</span>
-                        </div>
-                        <Slider 
-                            value={[laserSettings.speed]} 
-                            onValueChange={(val: any) => {
-                              const value = Array.isArray(val) ? val[0] : val;
-                              setLaserSettings(s => ({...s, speed: Number(value) || 0}));
-                            }}
-                            max={5000} 
-                            step={10} 
-                            className="py-2 cyan-slider"
-                        />
-                    </div>
-
-                    <div className="space-y-1">
-                        <div className="flex justify-between items-center text-[11px] font-medium">
-                            <Label className="text-white/70">Passes</Label>
-                            <span className="bg-laser-accent/10 text-laser-accent px-1.5 py-0.5 rounded font-bold border border-laser-accent/20">{laserSettings.passes}</span>
-                        </div>
-                        <Slider 
-                            value={[laserSettings.passes]} 
-                            onValueChange={(val: any) => {
-                              const value = Array.isArray(val) ? val[0] : val;
-                              setLaserSettings(s => ({...s, passes: Number(value) || 0}));
-                            }}
-                            max={10} 
-                            step={1} 
-                            className="py-2 cyan-slider"
-                        />
-                    </div>
-                  </div>
-                </div>
-              </section>
-
-              <section className="space-y-3">
-                <div className="flex items-center gap-2 px-1">
-                  <Scissors className="w-4 h-4 text-white/40" />
-                  <h3 className="font-semibold tracking-tight uppercase text-[10px] text-white/60">Canvas Editing</h3>
-                </div>
-                
-                <div className="p-3 glass-panel border-white/10 flex justify-around">
-                   <Button 
-                    variant="ghost" 
-                    size="icon" 
-                    className="h-8 w-8 hover:bg-white/10 text-white/60 hover:text-laser-accent"
-                    onClick={() => setProcOptions(p => ({...p, rotate: (p.rotate + 90) % 360}))}
-                    title="Rotate 90°"
-                   >
-                     <RotateCw className="w-4 h-4" />
-                   </Button>
-                   <Button 
-                    variant="ghost" 
-                    size="icon" 
-                    className={`h-8 w-8 hover:bg-white/10 ${procOptions.flipH ? 'bg-laser-accent/20 text-laser-accent' : 'text-white/60'}`}
-                    onClick={() => setProcOptions(p => ({...p, flipH: !p.flipH}))}
-                    title="Flip Horizontal"
-                   >
-                     <FlipHorizontal className="w-4 h-4" />
-                   </Button>
-                   <Button 
-                    variant="ghost" 
-                    size="icon" 
-                    className={`h-8 w-8 hover:bg-white/10 ${procOptions.flipV ? 'bg-laser-accent/20 text-laser-accent' : 'text-white/60'}`}
-                    onClick={() => setProcOptions(p => ({...p, flipV: !p.flipV}))}
-                    title="Flip Vertical"
-                   >
-                     <FlipVertical className="w-4 h-4" />
-                   </Button>
-                </div>
-              </section>
-
-              <section className="space-y-3">
-                <div className="flex items-center gap-2 px-1">
-                  <Cpu className="w-4 h-4 text-white/40" />
-                  <h3 className="font-semibold tracking-tight uppercase text-[10px] text-white/60">Image Filters</h3>
-                </div>
-                
-                <div className="p-3 glass-panel border-white/10 space-y-3">
-                  <div className="space-y-1.5">
-                    <Label className="text-[10px] font-bold uppercase tracking-widest text-white/40">Filter Styles</Label>
-                    <div className="grid grid-cols-2 gap-2">
+        {/* ─── RIGHT: Properties Panel ─── */}
+        <div className={`shrink-0 border-l border-white/10 bg-black/20 overflow-y-auto transition-all duration-300 ${propsCollapsed ? 'w-0 overflow-hidden' : 'w-[260px]'}`}>
+          <ScrollArea className="h-full">
+            <div className="p-3 space-y-4">
+              {engineeringMode === 'laser' ? (
+                <>
+                  {/* Laser Parameters */}
+                  <section className="space-y-2">
+                    <h3 className="text-[9px] font-black uppercase tracking-widest text-white/40 px-1 flex items-center gap-1.5"><Settings className="w-3 h-3" /> Laser Parameters</h3>
+                    <div className="p-2 glass-panel border-white/10 space-y-2.5">
+                      <div className="space-y-1">
+                        <Label className="text-[9px] font-bold uppercase tracking-widest text-white/40">Smart Presets</Label>
+                        <Select onValueChange={applySmartSettings}>
+                          <SelectTrigger className="glass-input border-white/10 bg-black/20 h-8 text-[10px]"><SelectValue placeholder="Select Material" /></SelectTrigger>
+                          <SelectContent className="glass-panel border-white/20">
+                            {Object.keys(materialPresets).map(mat => <SelectItem key={mat} value={mat} className="text-xs text-white hover:bg-white/10">{mat}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      </div>
                       {[
-                        { name: 'Draft', opts: { brightness: 0, contrast: 0.2, threshold: 128, dither: false, edgeDetection: false } },
-                        { name: 'Fine Fine', opts: { brightness: -0.1, contrast: 0.3, threshold: 120, dither: true, edgeDetection: false } },
-                        { name: 'Contrast Hi', opts: { brightness: 0, contrast: 0.8, threshold: 128, dither: true, edgeDetection: false } },
-                        { name: 'Stencil', opts: { brightness: 0, contrast: 0.5, threshold: 150, dither: false, edgeDetection: true } },
-                      ].map(style => (
-                        <Button 
-                          key={style.name}
-                          variant="outline"
-                          className="h-7 text-[9px] font-bold uppercase border-white/5 bg-black/20 hover:border-laser-accent/50"
-                          onClick={() => setProcOptions(p => ({...p, ...style.opts}))}
-                        >
-                          {style.name}
-                        </Button>
+                        { label: 'Power', key: 'power', max: 100, step: 1, suffix: '%' },
+                        { label: 'Speed', key: 'speed', max: 5000, step: 10, suffix: ' mm/min' },
+                        { label: 'Passes', key: 'passes', max: 10, step: 1, suffix: '' },
+                      ].map(s => (
+                        <div key={s.key} className="space-y-0.5">
+                          <div className="flex justify-between items-center text-[10px]">
+                            <Label className="text-white/60">{s.label}</Label>
+                            <span className="bg-laser-accent/10 text-laser-accent px-1 py-0.5 rounded text-[9px] font-bold border border-laser-accent/20">{(laserSettings as any)[s.key]}{s.suffix}</span>
+                          </div>
+                          <Slider value={[(laserSettings as any)[s.key]]} onValueChange={(val: any) => { const v = Array.isArray(val) ? val[0] : val; setLaserSettings(prev => ({...prev, [s.key]: Number(v) || 0})); }} max={s.max} step={s.step} className="py-1 cyan-slider" />
+                        </div>
                       ))}
                     </div>
-                  </div>
+                  </section>
 
-                  <div className="flex items-center justify-between">
-                    <Label className="text-[11px] font-medium text-white/70">Dithering</Label>
-                    <div 
-                      className={`w-9 h-4.5 rounded-full transition-colors cursor-pointer flex items-center p-0.5 ${procOptions.dither ? 'bg-laser-accent' : 'bg-white/10'}`}
-                      onClick={() => setProcOptions(p => ({...p, dither: !p.dither}))}
-                    >
-                      <motion.div 
-                        animate={{ x: procOptions.dither ? 18 : 0 }} 
-                        className={`w-3 h-3 rounded-full shadow-sm ${procOptions.dither ? 'bg-black' : 'bg-white'}`} 
-                      />
+                  {/* Canvas Editing */}
+                  <section className="space-y-2">
+                    <h3 className="text-[9px] font-black uppercase tracking-widest text-white/40 px-1 flex items-center gap-1.5"><Scissors className="w-3 h-3" /> Canvas Editing</h3>
+                    <div className="p-2 glass-panel border-white/10 flex justify-around">
+                      <Button variant="ghost" size="icon" className="h-7 w-7 hover:bg-white/10 text-white/60 hover:text-laser-accent" onClick={() => setProcOptions(p => ({...p, rotate: (p.rotate + 90) % 360}))} title="Rotate"><RotateCw className="w-3.5 h-3.5" /></Button>
+                      <Button variant="ghost" size="icon" className={`h-7 w-7 hover:bg-white/10 ${procOptions.flipH ? 'bg-laser-accent/20 text-laser-accent' : 'text-white/60'}`} onClick={() => setProcOptions(p => ({...p, flipH: !p.flipH}))} title="Flip H"><FlipHorizontal className="w-3.5 h-3.5" /></Button>
+                      <Button variant="ghost" size="icon" className={`h-7 w-7 hover:bg-white/10 ${procOptions.flipV ? 'bg-laser-accent/20 text-laser-accent' : 'text-white/60'}`} onClick={() => setProcOptions(p => ({...p, flipV: !p.flipV}))} title="Flip V"><FlipVertical className="w-3.5 h-3.5" /></Button>
                     </div>
-                  </div>
+                  </section>
 
-                  <div className="space-y-3">
-                    <div className="space-y-1">
-                        <div className="flex justify-between items-center text-[11px] font-medium">
-                            <Label className="text-white/70">Brightness</Label>
-                            <span className="text-laser-accent font-bold">{Math.round((procOptions.brightness || 0) * 100)}%</span>
+                  {/* Image Filters */}
+                  <section className="space-y-2">
+                    <h3 className="text-[9px] font-black uppercase tracking-widest text-white/40 px-1 flex items-center gap-1.5"><Cpu className="w-3 h-3" /> Image Filters</h3>
+                    <div className="p-2 glass-panel border-white/10 space-y-2">
+                      <div className="grid grid-cols-2 gap-1.5">
+                        {[
+                          { name: 'Draft', opts: { brightness: 0, contrast: 0.2, threshold: 128, dither: false, edgeDetection: false } },
+                          { name: 'Fine', opts: { brightness: -0.1, contrast: 0.3, threshold: 120, dither: true, edgeDetection: false } },
+                          { name: 'Contrast', opts: { brightness: 0, contrast: 0.8, threshold: 128, dither: true, edgeDetection: false } },
+                          { name: 'Stencil', opts: { brightness: 0, contrast: 0.5, threshold: 150, dither: false, edgeDetection: true } },
+                        ].map(style => (
+                          <Button key={style.name} variant="outline" className="h-6 text-[8px] font-bold uppercase border-white/5 bg-black/20 hover:border-laser-accent/50"
+                            onClick={() => setProcOptions(p => ({...p, ...style.opts}))}>{style.name}</Button>
+                        ))}
+                      </div>
+                      {/* Toggles */}
+                      {[
+                        { label: 'Dithering', key: 'dither', color: 'laser-accent' },
+                        { label: 'Invert', key: 'invert', color: 'laser-accent' },
+                        { label: 'Cut Mode', key: 'edgeDetection', color: 'cyan-500' },
+                      ].map(t => (
+                        <div key={t.key} className="flex items-center justify-between">
+                          <Label className={`text-[10px] font-medium ${t.key === 'edgeDetection' ? 'text-cyan-400 font-bold' : 'text-white/70'}`}>{t.label}</Label>
+                          <div className={`w-8 h-4 rounded-full transition-colors cursor-pointer flex items-center p-0.5 ${(procOptions as any)[t.key] ? `bg-${t.color}` : 'bg-white/10'}`}
+                            onClick={() => setProcOptions(p => ({...p, [t.key]: !(p as any)[t.key]}))}>
+                            <motion.div animate={{ x: (procOptions as any)[t.key] ? 16 : 0 }} className={`w-3 h-3 rounded-full shadow-sm ${(procOptions as any)[t.key] ? 'bg-black' : 'bg-white'}`} />
+                          </div>
                         </div>
-                        <Slider 
-                            value={[procOptions.brightness || 0]} 
-                            onValueChange={(val: any) => {
-                              const value = Array.isArray(val) ? val[0] : val;
-                              setProcOptions(s => ({...s, brightness: Number(value) || 0}));
-                            }}
-                            min={-1} 
-                            max={1} 
-                            step={0.01} 
-                            className="py-2 cyan-slider"
-                        />
-                    </div>
-
-                    <div className="space-y-1">
-                        <div className="flex justify-between items-center text-[11px] font-medium">
-                            <Label className="text-white/70">Contrast</Label>
-                            <span className="text-laser-accent font-bold">{Math.round((procOptions.contrast || 0) * 100)}%</span>
+                      ))}
+                      {/* Sliders */}
+                      {[
+                        { label: 'Brightness', key: 'brightness', min: -1, max: 1, step: 0.01, fmt: (v: number) => `${Math.round(v * 100)}%` },
+                        { label: 'Contrast', key: 'contrast', min: -1, max: 1, step: 0.01, fmt: (v: number) => `${Math.round(v * 100)}%` },
+                        { label: 'Threshold', key: 'threshold', min: 0, max: 255, step: 1, fmt: (v: number) => `${v}` },
+                      ].map(s => (
+                        <div key={s.key} className="space-y-0.5">
+                          <div className="flex justify-between items-center text-[10px]">
+                            <Label className="text-white/60">{s.label}</Label>
+                            <span className="text-laser-accent font-bold text-[9px]">{s.fmt((procOptions as any)[s.key] || 0)}</span>
+                          </div>
+                          <Slider value={[(procOptions as any)[s.key] || 0]} min={s.min} max={s.max} step={s.step} className="py-1 cyan-slider"
+                            onValueChange={(val: any) => { const v = Array.isArray(val) ? val[0] : val; setProcOptions(p => ({...p, [s.key]: s.key === 'threshold' ? Math.round(Number(v) || 0) : Number(v) || 0})); }} />
                         </div>
-                        <Slider 
-                            value={[procOptions.contrast || 0]} 
-                            onValueChange={(val: any) => {
-                              const value = Array.isArray(val) ? val[0] : val;
-                              setProcOptions(s => ({...s, contrast: Number(value) || 0}));
-                            }}
-                            min={-1} 
-                            max={1} 
-                            step={0.01} 
-                            className="py-2 cyan-slider"
-                        />
+                      ))}
                     </div>
-
-                    <div className="space-y-1">
-                        <div className="flex justify-between items-center text-[11px] font-medium">
-                            <Label className="text-white/70">Threshold</Label>
-                            <span className="text-laser-accent font-bold">{procOptions.threshold ?? 128}</span>
+                  </section>
+                </>
+              ) : (
+                <>
+                  {/* 3D Printer Settings */}
+                  <section className="space-y-2">
+                    <h3 className="text-[9px] font-black uppercase tracking-widest text-white/40 px-1 flex items-center gap-1.5"><Printer className="w-3 h-3" /> 3D Machine</h3>
+                    <div className="p-2 glass-panel border-white/10 space-y-2">
+                      <Label className="text-[9px] font-bold uppercase tracking-widest text-white/40">Printer</Label>
+                      <select className="w-full bg-black/40 border border-white/10 text-[10px] text-white/60 rounded px-2 py-1.5 outline-none focus:border-blue-500/50"
+                        value={selectedPrinter} onChange={e => setSelectedPrinter(e.target.value)}>
+                        <option>Saturn 3 Ultra (Resin)</option>
+                        <option>Formbot T-Rex 2 (FDM)</option>
+                        <option>Custom Industrial Slicer</option>
+                      </select>
+                      <div className="bg-blue-600/20 border border-blue-500/30 p-2 rounded-lg">
+                        <p className="text-[10px] font-bold text-blue-200">Industrial High Detail</p>
+                        <p className="text-[8px] text-blue-300/60 mt-0.5">0.05mm Layer • High Strength</p>
+                      </div>
+                      <div className="bg-black/20 p-2 rounded-lg border border-white/5">
+                        <p className="text-[9px] font-bold text-white/40 uppercase mb-1">Build Volume</p>
+                        <div className="flex justify-between text-[10px] text-white/60">
+                          <span>X: 130mm</span><span>Y: 130mm</span><span>Z: 150mm</span>
                         </div>
-                        <Slider 
-                            value={[procOptions.threshold ?? 128]} 
-                            onValueChange={(val: any) => {
-                              const value = Array.isArray(val) ? val[0] : val;
-                              setProcOptions(s => ({...s, threshold: Math.round(Number(value) || 128)}));
-                            }}
-                            max={255} 
-                            step={1} 
-                            className="py-2 cyan-slider"
-                        />
+                      </div>
                     </div>
-                  </div>
+                  </section>
 
-                   <div className="flex items-center justify-between">
-                    <Label className="text-[11px] font-medium text-white/70">Invert Palette</Label>
-                    <div 
-                      className={`w-9 h-4.5 rounded-full transition-colors cursor-pointer flex items-center p-0.5 ${procOptions.invert ? 'bg-laser-accent' : 'bg-white/10'}`}
-                      onClick={() => setProcOptions(p => ({...p, invert: !p.invert}))}
-                    >
-                      <motion.div 
-                        animate={{ x: procOptions.invert ? 18 : 0 }} 
-                        className={`w-3 h-3 rounded-full shadow-sm ${procOptions.invert ? 'bg-black' : 'bg-white'}`} 
-                      />
+                  <Card className="bg-blue-600 overflow-hidden border-none shadow-[0_5px_15px_rgba(59,130,246,0.2)]">
+                    <div className="p-2.5 text-white">
+                      <div className="flex justify-between items-start mb-1">
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span className="text-[7px] font-black uppercase bg-black/10 px-1 py-0.5 rounded">GANTASMO</span>
+                      </div>
+                      <p className="text-[9px] font-black leading-tight mb-0.5">Generative Strength Analysis</p>
+                      <p className="text-[7px] font-bold opacity-70 mb-1.5">Optimize for {designStyle} structures.</p>
+                      <Button className="w-full bg-black text-white hover:bg-black/80 font-bold h-6 text-[8px]">Run Simulation</Button>
                     </div>
-                  </div>
+                  </Card>
 
-                   <div className="flex items-center justify-between">
-                    <Label className="text-[11px] font-medium text-cyan-400 font-bold">Cutting Mode</Label>
-                    <div 
-                      className={`w-9 h-4.5 rounded-full transition-colors cursor-pointer flex items-center p-0.5 ${procOptions.edgeDetection ? 'bg-cyan-500 shadow-[0_0_10px_rgba(0,242,255,0.4)]' : 'bg-white/10'}`}
-                      onClick={() => {
-                          setProcOptions(p => ({...p, edgeDetection: !p.edgeDetection, dither: p.edgeDetection ? p.dither : false }));
-                      }}
-                    >
-                      <motion.div 
-                        animate={{ x: procOptions.edgeDetection ? 18 : 0 }} 
-                        className={`w-3 h-3 rounded-full shadow-sm ${procOptions.edgeDetection ? 'bg-black' : 'bg-white'}`} 
-                      />
+                  {/* Design Notes & Refs */}
+                  {protoProject?.designNotes && (
+                    <section className="space-y-1">
+                      <details className="group">
+                        <summary className="text-[9px] font-bold text-white/40 uppercase tracking-widest cursor-pointer hover:text-white/60 flex items-center gap-1.5">
+                          <Wrench className="w-3 h-3" /> Design Notes
+                          <ChevronRight className="w-3 h-3 group-open:rotate-90 transition-transform" />
+                        </summary>
+                        <p className="text-[10px] text-white/50 mt-1.5 whitespace-pre-wrap max-h-28 overflow-auto p-2 glass-panel border-white/10">{protoProject.designNotes}</p>
+                      </details>
+                    </section>
+                  )}
+                  {protoProject?.communityRefs && protoProject.communityRefs.length > 0 && (
+                    <div className="space-y-1">
+                      <span className="text-[8px] font-bold text-white/30 uppercase tracking-widest">References:</span>
+                      {protoProject.communityRefs.map((ref, idx) => (
+                        <p key={idx} className="text-[9px] text-blue-400/60 font-mono">{ref}</p>
+                      ))}
                     </div>
-                  </div>
-                </div>
-              </section>
-            </>
-          ) : (
-            <>
-              <section className="space-y-3">
-                <div className="flex items-center gap-2 px-1">
-                  <Printer className="w-4 h-4 text-white/40" />
-                  <h3 className="font-semibold tracking-tight uppercase text-[10px] text-white/60">3D Machine State</h3>
-                </div>
-                <div className="p-3 glass-panel border-white/10 space-y-4">
-                  <div className="space-y-2">
-                    <Label className="text-[10px] font-bold uppercase tracking-widest text-white/40">Active Slice Profile</Label>
-                    <div className="bg-blue-600/20 border border-blue-500/30 p-2.5 rounded-lg">
-                      <p className="text-xs font-bold text-blue-200">Industrial High Detail</p>
-                      <p className="text-[9px] text-blue-300/60 mt-0.5">0.05mm Layer • High Strength</p>
-                    </div>
-                  </div>
-                  
-                  <div className="space-y-2">
-                    <Label className="text-[10px] font-bold uppercase tracking-widest text-white/40">Sourcing Preference</Label>
-                    <div className="grid grid-cols-2 gap-2">
-                       <Button variant="outline" className="h-8 text-[9px] uppercase font-bold bg-white/5 border-white/10 text-white/60">Express Only</Button>
-                       <Button variant="outline" className="h-8 text-[9px] uppercase font-bold bg-white/5 border-white/10 text-white/60">Local First</Button>
-                    </div>
-                  </div>
-
-                  <Separator className="bg-white/5" />
-                  
-                  <div className="bg-black/20 p-3 rounded-lg border border-white/5">
-                    <p className="text-[10px] font-bold text-white/40 uppercase mb-2">Build Volume Analytics</p>
-                    <div className="flex justify-between items-center text-xs">
-                       <span className="text-white/60">X: 130mm</span>
-                       <span className="text-white/60">Y: 130mm</span>
-                       <span className="text-white/60">Z: 150mm</span>
-                    </div>
-                  </div>
-                </div>
-              </section>
-
-              <Card className="bg-blue-600 overflow-hidden border-none shadow-[0_5px_15px_rgba(59,130,246,0.2)]">
-                <div className="p-3 text-white">
-                   <div className="flex justify-between items-start mb-1">
-                      <Sparkles className="w-4 h-4" />
-                      <span className="text-[7px] font-black uppercase bg-black/10 px-1 py-0.5 rounded">GANTASMO ALPHA</span>
-                   </div>
-                   <p className="text-[10px] font-black leading-tight mb-0.5">Generative Strength Analysis</p>
-                   <p className="text-[8px] font-bold opacity-70 mb-2 leading-tight">Optimization for {designStyle} structures.</p>
-                   <Button className="w-full bg-black text-white hover:bg-black/80 font-bold h-7 text-[9px]">Run Simulation</Button>
-                </div>
-              </Card>
-            </>
-          )}
-        </aside>
-      </main>
-
-      {/* Persistent Floating Advisor Panel */}
-      <div className={`fixed bottom-4 right-4 z-[60] transition-all duration-300 ${advisorExpanded ? 'w-[400px] h-[520px]' : 'w-auto h-auto'}`}>
-        {advisorExpanded ? (
-          <div className="w-full h-full">
-            <ConsultantInterface 
-              isMuted={isAdvisorMuted} 
-              onToggleMute={() => setIsAdvisorMuted(!isAdvisorMuted)}
-              onSavePreset={handleSaveMaterialPreset}
-              onBuildBlueprint={handleBuildBlueprint}
-              onCollapse={() => setAdvisorExpanded(false)}
-            />
-          </div>
-        ) : (
-          <button 
-            onClick={() => setAdvisorExpanded(true)} 
-            className="group relative p-3.5 rounded-2xl bg-black/80 backdrop-blur-xl border border-cyan-500/30 shadow-lg shadow-cyan-500/10 hover:shadow-cyan-500/30 hover:border-cyan-400/60 transition-all duration-300 hover:scale-105"
-          >
-            <MessageSquare className="w-5 h-5 text-cyan-400 group-hover:text-cyan-300 transition-colors" />
-            <span className="absolute -top-1 -right-1 w-3 h-3 bg-cyan-400 rounded-full animate-pulse" />
-          </button>
-        )}
+                  )}
+                </>
+              )}
+            </div>
+          </ScrollArea>
+        </div>
       </div>
 
       <Toaster position="bottom-left" />
@@ -1159,13 +1231,11 @@ function ConsultantInterface({
   onToggleMute,
   onSavePreset,
   onBuildBlueprint,
-  onCollapse
 }: { 
   isMuted: boolean, 
   onToggleMute: () => void,
   onSavePreset: (name: string, settings: LaserSettings) => void,
   onBuildBlueprint: (description: string) => void,
-  onCollapse: () => void
 }) {
   const [messages, setMessages] = useState<{ role: 'user' | 'assistant', content: string }[]>([
     { role: 'assistant', content: "SUBSTRATA Design Advisor online. Tell me what you want to build — I'll help you decompose it into subsystems, pick components, and design the parts. When you're ready, I'll trigger a full blueprint. What's your project idea?" }
@@ -1251,15 +1321,6 @@ function ConsultantInterface({
                 title={isMuted ? 'Unmute' : 'Mute'}
             >
                 {isMuted ? <MicOff className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
-            </Button>
-            <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 rounded-full text-white/40 hover:text-white"
-                onClick={onCollapse}
-                title="Minimize"
-            >
-                <ChevronRight className="w-4 h-4 rotate-90" />
             </Button>
         </div>
       </div>

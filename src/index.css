@@ -87,7 +87,8 @@
         radial-gradient(at 100% 100%, #0f3460 0%, transparent 50%),
         radial-gradient(at 0% 100%, #533483 0%, transparent 50%);
     background-attachment: fixed;
-    min-height: 100vh;
+    height: 100vh;
+    overflow: hidden;
   }
 }
 
