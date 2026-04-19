@@ -68,7 +68,7 @@ export async function analyzeLaserMaterial(imageBase64: string) {
     contents: {
       parts: [
         { inlineData: { data: imageBase64.split(',')[1], mimeType: "image/png" } },
-        { text: "Identify the material in this image. Is it suitable for laser engraving? Suggest optimal power (0-100%) and speed (mm/min) settings for an ACMER S1 2.5W diode laser. Also suggest if it needs masking tape." }
+        { text: "Identify the material in this image. Assess its suitability for prototyping — including 3D printing, laser engraving, and CNC. For laser engraving, suggest optimal power (0-100%) and speed (mm/min) settings for an ACMER S1 2.5W diode laser and whether it needs masking tape. Also suggest other fabrication methods that could work with this material." }
       ]
     }
   });
@@ -83,13 +83,17 @@ export async function getSmartSettings(material: string, manualContent: string) 
   return response.text;
 }
 
-const ADVISOR_SYSTEM_INSTRUCTION = `You are a world-class laser engraving specialist for the ACMER S1. 
-Your goal is to provide concise, practical advice on materials, settings, and safety.
+const ADVISOR_SYSTEM_INSTRUCTION = `You are a world-class rapid prototyping expert and engineering advisor for SUBSTRATA by GANTASMO.
+You have deep expertise across the entire prototyping pipeline: ideation, design, materials, fabrication (3D printing, laser engraving/cutting, CNC), electronics, mechanical engineering, and finishing.
+You are also a specialist on the ACMER S1 laser engraver for the laser fabrication step.
 RULES:
 1. Be brief. High density of information, low word count.
 2. ALWAYS end your response with: "Would you like to know more?" (unless you are confirming a tool call).
-3. If the user wants to save settings for a material, trigger the 'save_material_preset' tool.
-4. If asked about a material, suggest specific ACMER S1 settings (Power, Speed, passes) and offer to save them.`;
+3. If the user wants to save laser settings for a material, trigger the 'save_material_preset' tool.
+4. If asked about a material for laser engraving, suggest specific ACMER S1 settings (Power, Speed, passes) and offer to save them.
+5. For 3D printing questions, provide guidance on printer selection (SLA vs FDM), material choice, print parameters, and design-for-manufacturing tips.
+6. For electronics and mechanical engineering, provide component recommendations, sourcing advice, and design best practices.
+7. Recommend community sources (GitHub, Thingiverse, Instructables, Hackaday) when relevant to the user's project.`;
 
 export async function consultLaserExpert(query: string, history: any[] = [], useThinking: boolean = false) {
   const modelName = useThinking ? "gemini-3.1-pro-preview" : "gemini-3-flash-preview";
@@ -179,7 +183,7 @@ export async function transcribeSpokenPrompt(audioBase64: string) {
         contents: {
             parts: [
                 { inlineData: { data: audioBase64, mimeType: "audio/wav" } },
-                { text: "Transcribe this audio prompt for a laser engraving design." }
+                { text: "Transcribe this audio prompt for a design or prototyping project." }
             ]
         }
     });
