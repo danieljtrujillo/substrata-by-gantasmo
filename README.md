@@ -6,7 +6,7 @@
 
 **The open-source command center for rogue engineers, garage-lab inventors, and anyone who thinks "buy it off the shelf" is a moral failing.**
 
-*Ideate · Design · Fabricate · Engrave · Ship*
+*Ideate · Design · Fabricate · Engrave · Label · Ship*
 
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178C6?logo=typescript&logoColor=white)
@@ -14,6 +14,7 @@
 ![Tailwind](https://img.shields.io/badge/Tailwind_CSS-4.1-06B6D4?logo=tailwindcss&logoColor=white)
 ![Cloudflare](https://img.shields.io/badge/Cloudflare-Pages+D1-F38020?logo=cloudflare&logoColor=white)
 ![Gemini](https://img.shields.io/badge/Gemini_AI-3.1-4285F4?logo=google&logoColor=white)
+![Version](https://img.shields.io/badge/Version-1.0.0-green)
 
 </div>
 
@@ -29,13 +30,13 @@ The **persistent AI Design Advisor** sits in the corner of every screen. Co-pilo
 
 ### Screenshots
 
-| Prototyping Studio | Design Studio | AI Advisor |
+| Prototyping Studio | Laser Studio | Label Studio |
 |---|---|---|
-| ![3D Prototyping](public/docs/screenshots/01-prototyping-studio.png) | ![Design Studio](public/docs/screenshots/02-laser-studio.png) | ![Advisor](public/docs/screenshots/03-advisor-tab.png) |
+| ![3D Prototyping](public/docs/screenshots/01-prototyping-studio.png) | ![Laser Studio](public/docs/screenshots/02-laser-studio.png) | ![Label Studio](public/docs/screenshots/03-label-studio.png) |
 
-| Maintenance Dashboard | Project Library |
-|---|---|
-| ![Maintenance](public/docs/screenshots/04-maintenance-tab.png) | ![Library](public/docs/screenshots/05-library-tab.png) |
+| Library | Documentation | Maintenance |
+|---|---|---|
+| ![Library](public/docs/screenshots/04-library.png) | ![Documentation](public/docs/screenshots/05-documentation.png) | ![Maintenance](public/docs/screenshots/06-maintenance.png) |
 
 ---
 
@@ -44,14 +45,14 @@ The **persistent AI Design Advisor** sits in the corner of every screen. Co-pilo
 SUBSTRATA structures every project as a pipeline with these stages:
 
 ```
- IDEATE ──→ DESIGN ──→ PROCESS ──→ FABRICATE ──→ FINISH
-   │           │          │            │            │
-   │   AI Design     Image proc   3D print    Laser engrave
-   │   Advisor        dithering    SLA/FDM     marking/cutting
-   │   (persistent)   edge detect  OpenSCAD    material presets
-   │   Component DB   filters      SVG parts   export to G-code
-   │   Template DB    canvas edit  Wiring      PNG/SVG output
-   │   Design         AI inpaint   Assembly    Community refs
+ IDEATE ──→ DESIGN ──→ PROCESS ──→ FABRICATE ──→ LABEL ──→ FINISH
+   │           │          │            │            │          │
+   │   AI Design     Image proc   3D print    Label design  Laser engrave
+   │   Advisor        dithering    SLA/FDM    Sticker/decal  marking/cutting
+   │   (persistent)   edge detect  OpenSCAD   Munbyn print   material presets
+   │   Component DB   filters      SVG parts  Edge silhouette export to G-code
+   │   Template DB    canvas edit  Wiring     Cut line SVG    PNG/SVG output
+   │   Design         AI inpaint   Assembly   AI generation   Community refs
    │   Practices      outpaint     steps
    └── Browse GitHub, Thingiverse, Instructables, Hackaday, GrabCAD
 ```
@@ -89,6 +90,19 @@ SUBSTRATA structures every project as a pipeline with these stages:
 - 9 pre-configured material profiles (Kraft paper, Plywood, Wood, Bamboo, Cork, Leather, Silica gel, Felt, Tin plate)
 - Power/speed/passes control fine-tuned for the ACMER S1 diode laser
 - SVG vector output for LaserGRBL and LightBurn
+
+### 🏷️ Label Studio (NEW)
+- Design labels, stickers, and decals for your builds and ship them on a thermal printer
+- **Munbyn ITPP130B** thermal label printer integration (203 DPI, 108mm max width, USB, direct thermal)
+- 8 label size presets: 4×6" Shipping, 4×3" Product, 2.25×1.25" Address, 2×2" Square, 3×2" Barcode, 2.25×0.75" Slim, 2" Circle, 3" Circle
+- Custom label dimensions with portrait/landscape orientation
+- AI-powered label generation via Gemini Flash Image — describe a label design and it creates it
+- Text overlay with adjustable font size for product names, serial numbers, warnings
+- **Edge silhouette outline**: generates an SVG cut path from any design so stickers can be laser-cut to shape
+- Export print-ready PNG at exact DPI resolution for the Munbyn printer
+- Export SVG cut line for laser cutter (red = cut path, blue = design boundary)
+- Quick-start templates: Product QR, Serial Number, Warning Decal, Logo Sticker, Address Label, Parts Tag
+- Batch printing support (1–50 copies per run)
 
 ### 🤖 AI Design Advisor (Persistent)
 - Floating panel in the bottom-right corner of every screen, accessible from any view
@@ -192,6 +206,36 @@ SUBSTRATA structures every project as a pipeline with these stages:
 
 ---
 
+## Supported Machines
+
+### 3D Printers
+
+| Printer | Type | Build Volume | Layer Height | Key Materials |
+|---------|------|-------------|-------------|--------------|
+| Elegoo Saturn 3 Ultra | MSLA Resin | 218×122×260mm | 0.01–0.2mm | Standard/ABS-Like/Castable Resin |
+| Formbot T-Rex 2+ | FDM / IDEX | 400×400×500mm | 0.05–0.4mm | PLA, PETG, ABS, TPU, Nylon, PC |
+| Bambu Lab P1S | FDM / CoreXY | 256×256×256mm | 0.05–0.32mm | PLA, PETG, ABS, ASA, TPU, PA, PC |
+| Prusa MK4S | FDM / Bedslinger | 250×210×220mm | 0.05–0.3mm | PLA, PETG, ASA, ABS, Flex |
+| Creality K1 Max | FDM / CoreXY | 300×300×300mm | 0.05–0.35mm | PLA, PETG, ABS, Nylon, TPU |
+
+### Laser Cutters / Engravers
+
+| Machine | Type | Work Area | Power | Key Materials |
+|---------|------|----------|-------|--------------|
+| ACMER S1 | Diode Laser | 130×130mm | 2.5W | Wood, Leather, Paper, Cork, Felt, Tin |
+| xTool D1 Pro 20W | Diode Laser | 432×406mm | 20W | Wood, Acrylic, Leather, Metal (marking), Glass |
+| Glowforge Pro | CO2 Laser | 495×279mm | 45W | Wood, Acrylic, Leather, Fabric, Coated Metal |
+| OMTech 60W CO2 | CO2 Laser Cutter | 508×305mm | 60W | Wood, Acrylic, MDF, Glass, Leather, Rubber |
+| Ortur Laser Master 3 | Diode Laser | 400×400mm | 10W | Wood, Leather, Paper, Fabric, Acrylic (dark) |
+
+### Label Printers
+
+| Printer | Type | Max Width | Resolution | Connectivity |
+|---------|------|----------|-----------|-------------|
+| Munbyn ITPP130B | Direct Thermal | 108mm (4.25") | 203 DPI | USB |
+
+---
+
 ## Getting Started
 
 ### Prerequisites
@@ -266,7 +310,7 @@ src/
 ├── App.tsx                      # Main application + persistent advisor panel
 ├── main.tsx                     # React entry point
 ├── index.css                    # Global styles + glassmorphism theme
-├── constants.ts                 # Material presets & project templates
+├── constants.ts                 # Material presets, project templates, printer/laser databases, label sizes
 ├── designDatabase.ts            # Component DB, design templates, DFM practices
 ├── components/
 │   ├── PrototypingStudio.tsx    # 3D AI prototyping engine (OpenSCAD/SVG/wiring)
@@ -280,7 +324,7 @@ src/
 │   └── projectService.ts        # D1 API CRUD + localStorage fallback
 └── lib/
     ├── auth.ts                  # Cloudflare OAuth + session management
-    └── imageProcessor.ts        # Image processing pipeline
+    └── imageProcessor.ts        # Image processing pipeline + edge silhouette SVG generator
 
 functions/                       # Cloudflare Pages Functions (API backend)
 ├── jwt.ts                       # JWT sign/verify + cookie helpers

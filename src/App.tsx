@@ -57,7 +57,14 @@ import {
   Cable,
   ClipboardList,
   ShoppingCart,
-  Wand2
+  Wand2,
+  Tag,
+  StickyNote,
+  CircleDot,
+  Type,
+  Square,
+  Circle,
+  Maximize
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { onAuthStateChanged, CloudflareUser } from './lib/auth';
@@ -91,7 +98,7 @@ import {
   DropdownMenuTrigger,
   DropdownMenuSeparator
 } from "@/components/ui/dropdown-menu";
-import { processImageForLaser, ImageProcessOptions } from './lib/imageProcessor';
+import { processImageForLaser, ImageProcessOptions, generateEdgeSilhouette } from './lib/imageProcessor';
 import { 
   generateLaserDesign, 
   consultLaserExpert, 
@@ -101,7 +108,7 @@ import {
   generateProjectBlueprint
 } from './services/geminiService';
 import { speakText, cancelSpeech } from './services/ttsService';
-import { ACMER_S1_PARAMETERS, ACMER_S1_MANUAL_SUMMARY, PROJECT_TEMPLATES, LaserSettings } from './constants';
+import { ACMER_S1_PARAMETERS, ACMER_S1_MANUAL_SUMMARY, PROJECT_TEMPLATES, LaserSettings, LabelSettings, LABEL_SIZE_PRESETS, MUNBYN_ITPP130B, PRINTER_DATABASE, LASER_DATABASE } from './constants';
 import { loginWithGoogle, logout, AUTH_AVAILABLE } from './lib/auth';
 import { AdvancedEditor } from './components/AdvancedEditor';
 import { DocumentationViewer } from './components/DocumentationViewer';
@@ -490,7 +497,7 @@ const GENERATION_STAGES = [
 
 export default function App() {
   // Layout state
-  const [engineeringMode, setEngineeringMode] = useState<'laser' | 'prototype'>('prototype');
+  const [engineeringMode, setEngineeringMode] = useState<'laser' | 'prototype' | 'label'>('prototype');
   const [designStyle, setDesignStyle] = useState<'minimalist' | 'deconstructivist' | 'classical' | 'organic'>('minimalist');
   const [isAdvisorMuted, setIsAdvisorMuted] = useState(false);
   const [advisorCollapsed, setAdvisorCollapsed] = useState(false);
@@ -538,6 +545,24 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+  // ── Label/Sticker/Decal State ──
+  const [labelSettings, setLabelSettings] = useState<LabelSettings>({
+    printerModel: MUNBYN_ITPP130B.name,
+    labelWidth: 101.6,
+    labelHeight: 152.4,
+    dpi: 203,
+    orientation: 'portrait',
+    copies: 1,
+    showCutLine: false,
+  });
+  const [labelDesignImage, setLabelDesignImage] = useState<string | null>(null);
+  const [labelSilhouetteSvg, setLabelSilhouetteSvg] = useState<string | null>(null);
+  const [labelText, setLabelText] = useState('');
+  const [labelTextSize, setLabelTextSize] = useState(24);
+  const [labelPrompt, setLabelPrompt] = useState('');
+  const [isGeneratingLabel, setIsGeneratingLabel] = useState(false);
+  const labelCanvasRef = useRef<HTMLCanvasElement>(null);
 
   // Auth State
   const [user, setUser] = useState<CloudflareUser | null>(null);
@@ -718,6 +743,103 @@ export default function App() {
     } finally {
       setIsLoadingProjects(false);
     }
+  };
+
+  // ── Label/Sticker/Decal Handlers ──
+  const handleLabelImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target?.result as string;
+      setLabelDesignImage(dataUrl);
+      setLabelSilhouetteSvg(null);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleGenerateLabelDesign = async () => {
+    if (!labelPrompt.trim()) return;
+    setIsGeneratingLabel(true);
+    try {
+      const result = await generateLaserDesign(
+        `Design a label/sticker: ${labelPrompt}. High contrast, clean edges, suitable for thermal printing at ${labelSettings.dpi} DPI. Dimensions: ${labelSettings.labelWidth}mm x ${labelSettings.labelHeight}mm. Black and white only.`,
+        designStyle,
+        labelSettings.labelWidth > labelSettings.labelHeight ? '16:9' : '9:16'
+      );
+      setLabelDesignImage(result);
+      setLabelSilhouetteSvg(null);
+      toast.success("Label design generated");
+    } catch (err) {
+      toast.error("Failed to generate label design");
+    } finally {
+      setIsGeneratingLabel(false);
+    }
+  };
+
+  const handleGenerateSilhouette = async () => {
+    if (!labelDesignImage) return;
+    try {
+      const svg = await generateEdgeSilhouette(labelDesignImage, procOptions.threshold);
+      setLabelSilhouetteSvg(svg);
+      setLabelSettings(s => ({ ...s, showCutLine: true }));
+      toast.success("Silhouette cut line generated");
+    } catch (err) {
+      toast.error("Failed to generate silhouette");
+    }
+  };
+
+  const handleExportLabel = () => {
+    if (!labelDesignImage) return;
+    // Render label to canvas at print DPI
+    const pxW = Math.round((labelSettings.labelWidth / 25.4) * labelSettings.dpi);
+    const pxH = Math.round((labelSettings.labelHeight / 25.4) * labelSettings.dpi);
+    const canvas = document.createElement('canvas');
+    canvas.width = pxW;
+    canvas.height = pxH;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.fillStyle = 'white';
+    ctx.fillRect(0, 0, pxW, pxH);
+
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      // Scale to fit
+      const scale = Math.min(pxW / img.width, pxH / img.height) * 0.9;
+      const dx = (pxW - img.width * scale) / 2;
+      const dy = (pxH - img.height * scale) / 2;
+      ctx.drawImage(img, dx, dy, img.width * scale, img.height * scale);
+
+      // Add text if present
+      if (labelText.trim()) {
+        ctx.fillStyle = 'black';
+        ctx.font = `bold ${labelTextSize * (labelSettings.dpi / 96)}px 'Helvetica Neue', Arial, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.fillText(labelText, pxW / 2, pxH - labelTextSize * 2);
+      }
+
+      const blob = canvas.toDataURL('image/png');
+      const a = document.createElement('a');
+      a.href = blob;
+      a.download = `label_${labelSettings.labelWidth}x${labelSettings.labelHeight}mm_${labelSettings.dpi}dpi.png`;
+      a.click();
+      toast.success(`Label exported at ${pxW}×${pxH}px (${labelSettings.dpi} DPI)`);
+    };
+    img.src = labelDesignImage;
+  };
+
+  const handleExportSilhouetteSvg = () => {
+    if (!labelSilhouetteSvg) return;
+    const blob = new Blob([labelSilhouetteSvg], { type: 'image/svg+xml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `cutline_${labelSettings.labelWidth}x${labelSettings.labelHeight}mm.svg`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success("Silhouette SVG exported for laser cutting");
   };
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -1079,6 +1201,7 @@ export default function App() {
           <div className="flex bg-white/5 rounded-md border border-white/5 p-0.5">
             <button onClick={() => setEngineeringMode('prototype')} className={`px-2.5 py-1 text-[9px] font-black uppercase tracking-wider rounded-sm transition-all ${engineeringMode === 'prototype' ? 'bg-blue-600 text-white' : 'text-white/40 hover:text-white/70'}`}>3D Prototype</button>
             <button onClick={() => setEngineeringMode('laser')} className={`px-2.5 py-1 text-[9px] font-black uppercase tracking-wider rounded-sm transition-all ${engineeringMode === 'laser' ? 'bg-laser-accent text-black' : 'text-white/40 hover:text-white/70'}`}>Laser Studio</button>
+            <button onClick={() => setEngineeringMode('label')} className={`px-2.5 py-1 text-[9px] font-black uppercase tracking-wider rounded-sm transition-all ${engineeringMode === 'label' ? 'bg-orange-500 text-white' : 'text-white/40 hover:text-white/70'}`}>Labels</button>
           </div>
 
           {/* Design style */}
@@ -1261,6 +1384,95 @@ export default function App() {
                     </div>
                   </div>
                 )}
+              </div>
+            </div>
+          </div>
+
+          {/* Label/Sticker Designer viewport */}
+          <div className={`absolute inset-0 ${engineeringMode === 'label' ? '' : 'hidden'}`}>
+            <div className="h-full flex flex-col">
+              {/* Label canvas area */}
+              <div className="flex-1 relative flex items-center justify-center bg-black/20 group">
+                {labelDesignImage ? (
+                  <div className="relative flex flex-col items-center gap-3 p-4">
+                    {/* Label preview with print dimensions */}
+                    <div className="relative bg-white rounded-lg shadow-2xl border-2 border-white/20 overflow-hidden"
+                      style={{
+                        width: `${Math.min(labelSettings.labelWidth * 2.5, 400)}px`,
+                        height: `${Math.min(labelSettings.labelHeight * 2.5, 500)}px`,
+                      }}>
+                      <img src={labelDesignImage} alt="Label" className="w-full h-full object-contain p-2" />
+                      {labelText && (
+                        <div className="absolute bottom-2 left-0 right-0 text-center">
+                          <span className="text-black font-bold" style={{ fontSize: `${labelTextSize}px` }}>{labelText}</span>
+                        </div>
+                      )}
+                      {labelSettings.showCutLine && labelSilhouetteSvg && (
+                        <div className="absolute inset-0 pointer-events-none" dangerouslySetInnerHTML={{ __html: sanitizeSvg(labelSilhouetteSvg) }} />
+                      )}
+                    </div>
+                    <div className="flex gap-1.5 text-[9px] text-white/40 font-mono">
+                      <span>{labelSettings.labelWidth}×{labelSettings.labelHeight}mm</span>
+                      <span>•</span>
+                      <span>{labelSettings.dpi} DPI</span>
+                      <span>•</span>
+                      <span>{Math.round((labelSettings.labelWidth / 25.4) * labelSettings.dpi)}×{Math.round((labelSettings.labelHeight / 25.4) * labelSettings.dpi)}px</span>
+                    </div>
+                    <div className="absolute top-3 right-3 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Button size="sm" variant="secondary" onClick={handleExportLabel} className="bg-orange-500/90 text-white hover:bg-orange-500 font-bold h-7 text-[10px]">
+                        <Printer className="w-3 h-3 mr-1" /> Export Print
+                      </Button>
+                      <Button size="icon" variant="secondary" className="glass-panel h-7 w-7 hover:bg-white/20 text-orange-400" onClick={handleGenerateSilhouette} title="Generate Cut Line">
+                        <Scissors className="w-3 h-3" />
+                      </Button>
+                      {labelSilhouetteSvg && (
+                        <Button size="icon" variant="secondary" className="glass-panel h-7 w-7 hover:bg-white/20 text-red-400" onClick={handleExportSilhouetteSvg} title="Export Cut SVG">
+                          <FileCode className="w-3 h-3" />
+                        </Button>
+                      )}
+                      <Button size="icon" variant="secondary" className="glass-panel h-7 w-7 hover:bg-white/20" onClick={() => { setLabelDesignImage(null); setLabelSilhouetteSvg(null); }}>
+                        <Trash2 className="w-3 h-3 text-red-400" />
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center space-y-3">
+                    <div className="mx-auto w-14 h-14 bg-white/5 border border-dashed border-white/20 rounded-2xl flex items-center justify-center text-white/20">
+                      <Tag className="w-7 h-7" />
+                    </div>
+                    <p className="text-sm font-medium text-white">Design your label</p>
+                    <p className="text-xs text-white/40">Upload an image or generate with AI</p>
+                    <div className="flex gap-2 justify-center">
+                      <Button variant="outline" className="relative group overflow-hidden border-white/20 glass-panel hover:bg-white/10 text-white text-xs h-8">
+                        <input type="file" className="absolute inset-0 opacity-0 cursor-pointer" onChange={handleLabelImageUpload} accept="image/*" />
+                        <Upload className="w-3 h-3 mr-1" /> Upload
+                      </Button>
+                      <Button onClick={() => {}} className="bg-orange-500 hover:bg-orange-600 text-white gap-1 text-xs h-8">
+                        <Sparkles className="w-3 h-3" /> AI Generate
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+              {/* Label prompt bar */}
+              <div className="p-3 border-t border-white/10 bg-black/30">
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <Input placeholder="e.g. QR code label for my hexapod robot..." className="glass-input h-10 pr-12 text-sm border-white/10"
+                      value={labelPrompt} onChange={e => setLabelPrompt(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleGenerateLabelDesign()} />
+                    <div className="absolute right-1 top-1">
+                      <Button size="icon" className="h-8 w-8 bg-orange-500 hover:bg-orange-600" onClick={handleGenerateLabelDesign} disabled={isGeneratingLabel || !labelPrompt}>
+                        {isGeneratingLabel ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ChevronRight className="w-4 h-4" />}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  <p className="text-[9px] text-white/30 mt-0.5 pr-1">Templates:</p>
+                  {['Product QR', 'Serial Number', 'Warning Decal', 'Logo Sticker', 'Address Label', 'Parts Tag'].map(p => (
+                    <button key={p} onClick={() => setLabelPrompt(p)} className="text-[9px] font-bold uppercase tracking-widest px-2 py-1 glass-panel border-white/10 text-white/60 hover:border-orange-500 hover:text-orange-400 transition-colors">{p}</button>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
@@ -1542,6 +1754,117 @@ export default function App() {
                       ))}
                     </div>
                   </section>
+                </>
+              ) : engineeringMode === 'label' ? (
+                <>
+                  {/* ── Label Printer Settings ── */}
+                  <section className="space-y-2">
+                    <h3 className="text-[9px] font-black uppercase tracking-widest text-white/40 px-1 flex items-center gap-1.5"><Tag className="w-3 h-3" /> Label Settings</h3>
+                    <div className="p-2 glass-panel border-white/10 space-y-2.5">
+                      <div className="space-y-1">
+                        <Label className="text-[9px] font-bold uppercase tracking-widest text-white/40">Preset Size</Label>
+                        <Select onValueChange={(key) => {
+                          const preset = LABEL_SIZE_PRESETS[key];
+                          if (preset) setLabelSettings(s => ({ ...s, labelWidth: preset.width, labelHeight: preset.height }));
+                        }}>
+                          <SelectTrigger className="glass-input border-white/10 bg-black/20 h-8 text-[10px]"><SelectValue placeholder="Select label size" /></SelectTrigger>
+                          <SelectContent className="glass-panel border-white/20">
+                            {Object.entries(LABEL_SIZE_PRESETS).map(([key, v]) => (
+                              <SelectItem key={key} value={key} className="text-xs text-white hover:bg-white/10">{v.label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      {/* Custom dimensions */}
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-0.5">
+                          <Label className="text-[9px] text-white/40">Width (mm)</Label>
+                          <Input type="number" className="glass-input border-white/10 h-7 text-[10px]" value={labelSettings.labelWidth}
+                            onChange={e => setLabelSettings(s => ({ ...s, labelWidth: parseFloat(e.target.value) || 0 }))} />
+                        </div>
+                        <div className="space-y-0.5">
+                          <Label className="text-[9px] text-white/40">Height (mm)</Label>
+                          <Input type="number" className="glass-input border-white/10 h-7 text-[10px]" value={labelSettings.labelHeight}
+                            onChange={e => setLabelSettings(s => ({ ...s, labelHeight: parseFloat(e.target.value) || 0 }))} />
+                        </div>
+                      </div>
+                      {/* Orientation */}
+                      <div className="flex gap-1">
+                        <Button variant={labelSettings.orientation === 'portrait' ? 'default' : 'outline'} size="sm"
+                          className={`flex-1 h-6 text-[8px] font-bold uppercase ${labelSettings.orientation === 'portrait' ? 'bg-orange-500 text-white' : 'border-white/10 text-white/40'}`}
+                          onClick={() => setLabelSettings(s => ({ ...s, orientation: 'portrait' }))}>Portrait</Button>
+                        <Button variant={labelSettings.orientation === 'landscape' ? 'default' : 'outline'} size="sm"
+                          className={`flex-1 h-6 text-[8px] font-bold uppercase ${labelSettings.orientation === 'landscape' ? 'bg-orange-500 text-white' : 'border-white/10 text-white/40'}`}
+                          onClick={() => setLabelSettings(s => ({ ...s, orientation: 'landscape' }))}>Landscape</Button>
+                      </div>
+                      {/* Copies */}
+                      <div className="space-y-0.5">
+                        <div className="flex justify-between items-center text-[10px]">
+                          <Label className="text-white/60">Copies</Label>
+                          <span className="bg-orange-500/10 text-orange-400 px-1 py-0.5 rounded text-[9px] font-bold border border-orange-500/20">{labelSettings.copies}</span>
+                        </div>
+                        <Slider value={[labelSettings.copies]} min={1} max={50} step={1} className="py-1"
+                          onValueChange={(v: any) => setLabelSettings(s => ({ ...s, copies: Array.isArray(v) ? v[0] : v }))} />
+                      </div>
+                    </div>
+                  </section>
+
+                  {/* Label Text */}
+                  <section className="space-y-2">
+                    <h3 className="text-[9px] font-black uppercase tracking-widest text-white/40 px-1 flex items-center gap-1.5"><Type className="w-3 h-3" /> Label Text</h3>
+                    <div className="p-2 glass-panel border-white/10 space-y-2">
+                      <Input placeholder="Label text..." className="glass-input border-white/10 h-8 text-[10px]" value={labelText}
+                        onChange={e => setLabelText(e.target.value)} />
+                      <div className="space-y-0.5">
+                        <div className="flex justify-between items-center text-[10px]">
+                          <Label className="text-white/60">Font Size</Label>
+                          <span className="text-orange-400 font-bold text-[9px]">{labelTextSize}px</span>
+                        </div>
+                        <Slider value={[labelTextSize]} min={8} max={72} step={1} className="py-1"
+                          onValueChange={(v: any) => setLabelTextSize(Array.isArray(v) ? v[0] : v)} />
+                      </div>
+                    </div>
+                  </section>
+
+                  {/* Silhouette / Cut Line */}
+                  <section className="space-y-2">
+                    <h3 className="text-[9px] font-black uppercase tracking-widest text-white/40 px-1 flex items-center gap-1.5"><Scissors className="w-3 h-3" /> Silhouette Cut</h3>
+                    <div className="p-2 glass-panel border-white/10 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-[10px] text-white/70 font-bold">Show Cut Line</Label>
+                        <div className={`w-8 h-4 rounded-full transition-colors cursor-pointer flex items-center p-0.5 ${labelSettings.showCutLine ? 'bg-red-500' : 'bg-white/10'}`}
+                          onClick={() => setLabelSettings(s => ({ ...s, showCutLine: !s.showCutLine }))}>
+                          <motion.div animate={{ x: labelSettings.showCutLine ? 16 : 0 }} className={`w-3 h-3 rounded-full shadow-sm ${labelSettings.showCutLine ? 'bg-white' : 'bg-white'}`} />
+                        </div>
+                      </div>
+                      <Button variant="outline" size="sm" className="w-full h-7 text-[9px] border-red-500/30 text-red-400 hover:bg-red-500/10 font-bold uppercase"
+                        onClick={handleGenerateSilhouette} disabled={!labelDesignImage}>
+                        <Scissors className="w-3 h-3 mr-1" /> Generate Edge Outline
+                      </Button>
+                      {labelSilhouetteSvg && (
+                        <Button variant="outline" size="sm" className="w-full h-7 text-[9px] border-white/10 text-white/60 hover:bg-white/10 font-bold uppercase"
+                          onClick={handleExportSilhouetteSvg}>
+                          <Download className="w-3 h-3 mr-1" /> Export Cut SVG
+                        </Button>
+                      )}
+                      <p className="text-[8px] text-white/30 italic">Red line = laser cut path for sticker shape</p>
+                    </div>
+                  </section>
+
+                  {/* Printer Card */}
+                  <Card className="bg-orange-500 overflow-hidden border-none shadow-[0_5px_15px_rgba(249,115,22,0.2)]">
+                    <div className="p-2.5 text-white">
+                      <div className="flex justify-between items-start mb-1">
+                        <Printer className="w-3.5 h-3.5" />
+                        <span className="text-[7px] font-black uppercase bg-black/10 px-1 py-0.5 rounded">MUNBYN</span>
+                      </div>
+                      <p className="text-[9px] font-black leading-tight mb-0.5">{MUNBYN_ITPP130B.name}</p>
+                      <p className="text-[7px] font-bold opacity-70 mb-1.5">{MUNBYN_ITPP130B.dpi} DPI • {MUNBYN_ITPP130B.maxPrintWidth}mm • Direct Thermal</p>
+                      <Button className="w-full bg-black text-white hover:bg-black/80 font-bold h-6 text-[8px]" onClick={handleExportLabel} disabled={!labelDesignImage}>
+                        <Download className="w-3 h-3 mr-1" /> Export Print-Ready
+                      </Button>
+                    </div>
+                  </Card>
                 </>
               ) : (
                 <>

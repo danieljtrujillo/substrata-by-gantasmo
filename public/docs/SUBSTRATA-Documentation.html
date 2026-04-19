@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SUBSTRATA v1.0.0 — Technical Documentation</title>
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({ startOnLoad: true, theme: 'dark' });
+  </script>
+  <style>
+    :root { --bg: #0a0a0a; --fg: #e4e4e7; --muted: #71717a; --accent: #06b6d4; --orange: #f97316; --blue: #3b82f6; --card: #18181b; --border: #27272a; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--fg); line-height: 1.6; padding: 2rem; max-width: 900px; margin: 0 auto; }
+    h1 { font-size: 2.5rem; font-weight: 900; letter-spacing: -0.03em; margin-bottom: 0.25rem; }
+    h2 { font-size: 1.5rem; font-weight: 800; letter-spacing: -0.02em; margin-top: 3rem; margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
+    h3 { font-size: 1.1rem; font-weight: 700; margin-top: 1.5rem; margin-bottom: 0.5rem; color: var(--accent); }
+    p { margin-bottom: 0.75rem; color: var(--fg); }
+    .subtitle { color: var(--muted); font-size: 0.9rem; margin-bottom: 2rem; }
+    .badge { display: inline-block; padding: 2px 8px; font-size: 0.7rem; font-weight: 700; border-radius: 4px; margin-right: 0.25rem; background: var(--card); border: 1px solid var(--border); color: var(--accent); text-transform: uppercase; letter-spacing: 0.05em; }
+    .badge.orange { color: var(--orange); }
+    .badge.blue { color: var(--blue); }
+    ul, ol { padding-left: 1.5rem; margin-bottom: 0.75rem; }
+    li { margin-bottom: 0.25rem; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+    th, td { text-align: left; padding: 0.5rem 0.75rem; border: 1px solid var(--border); font-size: 0.85rem; }
+    th { background: var(--card); font-weight: 700; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.05em; color: var(--accent); }
+    code { font-family: 'Cascadia Code', 'Fira Code', monospace; background: var(--card); padding: 1px 5px; border-radius: 3px; font-size: 0.85rem; }
+    pre { background: var(--card); padding: 1rem; border-radius: 8px; overflow-x: auto; margin: 1rem 0; border: 1px solid var(--border); }
+    pre code { background: none; padding: 0; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; margin: 1rem 0; }
+    .mermaid { background: var(--card); border-radius: 8px; padding: 1rem; margin: 1rem 0; border: 1px solid var(--border); }
+    .toc { list-style: none; padding-left: 0; }
+    .toc li { margin-bottom: 0.25rem; }
+    .toc a { color: var(--accent); text-decoration: none; font-weight: 600; }
+    .toc a:hover { text-decoration: underline; }
+    hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+    @media print {
+      body { background: white; color: black; padding: 0; }
+      .card, pre, .mermaid { border-color: #ddd; }
+      th { background: #f3f3f3; color: #000; }
+      h2 { page-break-before: always; }
+      h3 { color: #0891b2; }
+    }
+  </style>
+</head>
+<body>
+  <h1>SUBSTRATA</h1>
+  <p style="font-size: 0.85rem; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; font-weight: 800;">by GANTASMO</p>
+  <p class="subtitle">v1.0.0 — AI-Powered Engineering Suite for Laser Engraving, 3D Prototyping, and Label Design</p>
+  <div>
+    <span class="badge">React 19</span>
+    <span class="badge">TypeScript 5.8</span>
+    <span class="badge">Vite 6.2</span>
+    <span class="badge blue">Gemini 3.1</span>
+    <span class="badge orange">Cloudflare Pages + D1</span>
+  </div>
+
+  <h2>Table of Contents</h2>
+  <ol class="toc">
+    <li><a href="#overview">1. Overview</a></li>
+    <li><a href="#architecture">2. System Architecture</a></li>
+    <li><a href="#pipeline">3. Data Flow Pipeline</a></li>
+    <li><a href="#modes">4. Engineering Modes</a></li>
+    <li><a href="#prototype">5. 3D Prototyping Studio</a></li>
+    <li><a href="#laser">6. Laser Design Studio</a></li>
+    <li><a href="#label">7. Label Studio</a></li>
+    <li><a href="#advisor">8. AI Design Advisor</a></li>
+    <li><a href="#editor">9. Advanced Editor (Design Synth)</a></li>
+    <li><a href="#machines">10. Supported Machines</a></li>
+    <li><a href="#security">11. Security</a></li>
+    <li><a href="#api">12. AI Model Reference</a></li>
+    <li><a href="#setup">13. Setup & Configuration</a></li>
+  </ol>
+
+  <h2 id="overview">1. Overview</h2>
+  <p>SUBSTRATA is a full-stack prototyping command center. AI image generation, parametric 3D modeling, laser G-code pipelines, label/sticker design, real-time material analysis, wiring diagrams, and firmware scaffolding all live in one dark-mode glassmorphism cockpit powered by Google Gemini 3.1.</p>
+  <p>Three engineering modes — <strong>3D Prototype</strong>, <strong>Laser Studio</strong>, and <strong>Labels</strong> — cover the full path from idea to finished product. A persistent AI Design Advisor co-pilots every mode, with access to 30+ real components, 12 project archetypes, and DFM best practices.</p>
+
+  <h2 id="architecture">2. System Architecture</h2>
+  <div class="mermaid">
+graph TB
+    subgraph Browser["Browser Client (React 19 + TypeScript)"]
+        direction TB
+        App["App.tsx — Main Application"]
+        App --> PS["3D Prototyping Studio"]
+        App --> LS["Laser Design Studio"]
+        App --> LB["Label Studio"]
+        App --> AE["Advanced Editor (Konva)"]
+        App --> AI["AI Design Advisor (Persistent)"]
+        subgraph Services["Service Layer"]
+            GS["geminiService.ts"]
+            TTS["ttsService.ts"]
+            ProjS["projectService.ts"]
+        end
+        subgraph Libs["Library Layer"]
+            IP["imageProcessor.ts"]
+            Auth["auth.ts"]
+            Const["constants.ts"]
+        end
+        App --> Services
+        App --> Libs
+    end
+    subgraph External["External Services"]
+        Gemini["Google Gemini API"]
+        CF["Cloudflare Pages + D1"]
+        THREE["Three.js"]
+    end
+    Services --> Gemini
+    Services --> CF
+    PS --> THREE
+  </div>
+
+  <h2 id="pipeline">3. Data Flow Pipeline</h2>
+  <div class="mermaid">
+graph LR
+    subgraph Input
+        Voice["Voice Prompt"]
+        Text["Text Prompt"]
+        Image["Image Upload"]
+    end
+    subgraph Processing["AI Processing"]
+        Transcribe["Transcribe (Flash)"]
+        Generate["Generate Design (Flash Image)"]
+        Blueprint["Generate Blueprint (Pro)"]
+        Analyze["Material Analysis (Pro)"]
+    end
+    subgraph Output
+        SCAD["OpenSCAD Parts"]
+        SVG["SVG Cut Files"]
+        WIRE["Wiring Diagrams"]
+        BOM["Bill of Materials"]
+        LABEL["Print-Ready Label"]
+        CUT["Silhouette SVG"]
+        GCODE["Laser G-Code"]
+    end
+    Voice --> Transcribe --> Text
+    Text --> Generate
+    Text --> Blueprint
+    Image --> Analyze
+    Generate --> SVG
+    Generate --> LABEL
+    Blueprint --> SCAD
+    Blueprint --> SVG
+    Blueprint --> WIRE
+    Blueprint --> BOM
+    LABEL --> CUT
+    Analyze --> GCODE
+  </div>
+
+  <h2 id="modes">4. Engineering Modes</h2>
+  <table>
+    <tr><th>Mode</th><th>Purpose</th><th>Key Output</th><th>Accent Color</th></tr>
+    <tr><td><strong>3D Prototype</strong></td><td>Full hardware project generation from text/voice</td><td>OpenSCAD, SVG, Wiring, BOM, Assembly</td><td style="color:#3b82f6">Blue</td></tr>
+    <tr><td><strong>Laser Studio</strong></td><td>Image-to-laser pipeline for engraving/cutting</td><td>Processed PNG, SVG vectors, G-code params</td><td style="color:#06b6d4">Cyan</td></tr>
+    <tr><td><strong>Labels</strong></td><td>Label/sticker/decal design for thermal printing</td><td>Print-ready PNG, Edge silhouette SVG</td><td style="color:#f97316">Orange</td></tr>
+  </table>
+
+  <h2 id="prototype">5. 3D Prototyping Studio</h2>
+  <div class="card">
+    <h3>Capabilities</h3>
+    <ul>
+      <li>Text or voice-driven project generation via Gemini Pro</li>
+      <li>Parametric OpenSCAD 3D part definitions with live preview</li>
+      <li>SVG laser-cut layouts with vector paths</li>
+      <li>Pin-by-pin wiring diagrams for MCUs, sensors, actuators</li>
+      <li>Auto-generated BOM with pricing from Amazon, McMaster-Carr, Pololu, Adafruit, Grainger</li>
+      <li>Numbered assembly instructions</li>
+      <li>Three.js viewport with orbit controls and multi-light staging</li>
+      <li>30+ real components (SG90 servos, ESP32, Arduino Nano, MPU6050, WS2812B, etc.)</li>
+      <li>12 project archetypes (hexapod, quadruped, robotic arm, rover, LED doorknob, weather station, etc.)</li>
+      <li>Design notes and community refs (GitHub, Thingiverse, Instructables, Hackaday, GrabCAD)</li>
+    </ul>
+    <h3>Output Tabs</h3>
+    <table>
+      <tr><th>Tab</th><th>Content</th></tr>
+      <tr><td>3D Workspace</td><td>Interactive Three.js viewport with orbit, zoom, shadows</td></tr>
+      <tr><td>Bill of Materials</td><td>Components with qty, specs, price, vendor links. Sort by fastest or cheapest.</td></tr>
+      <tr><td>Design Files</td><td>OpenSCAD (.scad), SVG cut files, wiring diagrams — preview or raw code view</td></tr>
+      <tr><td>Control Code</td><td>Generated firmware / control scripts</td></tr>
+      <tr><td>Assembly</td><td>Step-by-step numbered build instructions</td></tr>
+    </table>
+  </div>
+
+  <h2 id="laser">6. Laser Design Studio</h2>
+  <div class="card">
+    <h3>Image Processing Pipeline</h3>
+    <ul>
+      <li>AI design generation via text prompt (4 design styles: minimalist, deconstructivist, classical, organic)</li>
+      <li>Voice prompts via microphone with Gemini Flash transcription</li>
+      <li>Image upload with drag-and-drop</li>
+      <li>Grayscale conversion, Floyd-Steinberg dithering, Sobel edge detection</li>
+      <li>Brightness, contrast, threshold sliders with real-time preview</li>
+      <li>Canvas transforms: rotate 90°, flip H/V</li>
+      <li>Pre-built filter presets: Draft, Fine, Contrast, Stencil</li>
+      <li>AI material analysis for laser settings</li>
+    </ul>
+    <h3>Laser Parameters</h3>
+    <table>
+      <tr><th>Parameter</th><th>Range</th></tr>
+      <tr><td>Power</td><td>0–100%</td></tr>
+      <tr><td>Speed</td><td>0–5000 mm/min</td></tr>
+      <tr><td>Passes</td><td>1–10</td></tr>
+      <tr><td>Mode</td><td>M3 (constant) / M4 (dynamic)</td></tr>
+      <tr><td>Quality</td><td>Lines per mm resolution</td></tr>
+    </table>
+    <h3>Material Presets (ACMER S1)</h3>
+    <table>
+      <tr><th>Material</th><th>Power</th><th>Speed</th><th>Passes</th></tr>
+      <tr><td>Kraft Paper</td><td>15%</td><td>4000</td><td>1</td></tr>
+      <tr><td>Plywood</td><td>70%</td><td>3000</td><td>1</td></tr>
+      <tr><td>Hard Wood</td><td>85%</td><td>1500</td><td>2</td></tr>
+      <tr><td>Bamboo</td><td>75%</td><td>2500</td><td>1</td></tr>
+      <tr><td>Cork</td><td>30%</td><td>3500</td><td>1</td></tr>
+      <tr><td>Leather</td><td>80%</td><td>2000</td><td>1</td></tr>
+      <tr><td>Silica Gel</td><td>25%</td><td>4000</td><td>1</td></tr>
+      <tr><td>Felt</td><td>20%</td><td>3500</td><td>1</td></tr>
+      <tr><td>Tin Plate</td><td>100%</td><td>500</td><td>3</td></tr>
+    </table>
+  </div>
+
+  <h2 id="label">7. Label Studio</h2>
+  <div class="card">
+    <h3>Overview</h3>
+    <p>Design labels, stickers, and decals for your builds and export them for thermal printing or laser-cut sticker production.</p>
+    <h3>Workflow</h3>
+    <div class="mermaid">
+graph TD
+    LP1["Design Input (Upload / AI Generate)"] --> LP2["Preview with Text Overlay"]
+    LP2 --> LP3{"Generate Silhouette?"}
+    LP3 -->|Yes| LP4["Edge Detection (Sobel)"]
+    LP4 --> LP5["Binary Mask + Boundary Extraction"]
+    LP5 --> LP6["SVG Cut Path Generation"]
+    LP3 -->|No| LP7["Export Print-Ready PNG"]
+    LP6 --> LP8["Export Cut SVG for Laser"]
+    LP6 --> LP7
+    </div>
+    <h3>Label Size Presets</h3>
+    <table>
+      <tr><th>Size</th><th>Dimensions</th><th>Use Case</th></tr>
+      <tr><td>4×6"</td><td>101.6 × 152.4 mm</td><td>Shipping labels</td></tr>
+      <tr><td>4×3"</td><td>101.6 × 76.2 mm</td><td>Product labels</td></tr>
+      <tr><td>2.25×1.25"</td><td>57.15 × 31.75 mm</td><td>Address labels</td></tr>
+      <tr><td>2×2"</td><td>50.8 × 50.8 mm</td><td>Square stickers</td></tr>
+      <tr><td>3×2"</td><td>76.2 × 50.8 mm</td><td>Barcode labels</td></tr>
+      <tr><td>2.25×0.75"</td><td>57.15 × 19.05 mm</td><td>Slim tags</td></tr>
+      <tr><td>2" Circle</td><td>50.8 mm ⌀</td><td>Round stickers</td></tr>
+      <tr><td>3" Circle</td><td>76.2 mm ⌀</td><td>Round stickers</td></tr>
+    </table>
+    <h3>Printer: Munbyn ITPP130B</h3>
+    <table>
+      <tr><th>Spec</th><th>Value</th></tr>
+      <tr><td>Type</td><td>Direct Thermal (no ink)</td></tr>
+      <tr><td>Resolution</td><td>203 DPI</td></tr>
+      <tr><td>Max Print Width</td><td>108 mm (4.25")</td></tr>
+      <tr><td>Label Width Range</td><td>25–118 mm</td></tr>
+      <tr><td>Print Speed</td><td>Up to 150 mm/s</td></tr>
+      <tr><td>Connectivity</td><td>USB</td></tr>
+    </table>
+    <h3>Edge Silhouette Outline</h3>
+    <p>The silhouette feature generates a vector cut path from any design image so stickers can be laser-cut to their exact shape:</p>
+    <ol>
+      <li><strong>Binary Mask</strong>: Uses alpha channel or luminance thresholding to separate content from background</li>
+      <li><strong>Boundary Detection</strong>: Identifies edge pixels (content adjacent to background)</li>
+      <li><strong>Angular Sort</strong>: Orders edge points by angle from centroid for continuous path</li>
+      <li><strong>Path Simplification</strong>: Reduces point count (every Nth point) for cleaner SVG</li>
+      <li><strong>Offset Cut Line</strong>: Generates 2px outward offset from silhouette for kerf compensation</li>
+      <li><strong>SVG Output</strong>: Red line = laser cut path, Blue line = design boundary reference</li>
+    </ol>
+  </div>
+
+  <h2 id="advisor">8. AI Design Advisor</h2>
+  <div class="card">
+    <ul>
+      <li>Persistent floating panel in the bottom-right corner, accessible from any mode</li>
+      <li>Breaks ideas into subsystems, identifies components, suggests fabrication methods</li>
+      <li>References 30+ real components with specs and prices</li>
+      <li>Built-in DFM rules for 3D printing, laser cutting, electronics, mechanical design</li>
+      <li>Can trigger <code>generate_blueprint</code> to switch to Prototyping Studio and begin generation</li>
+      <li>Can save material presets via <code>save_material_preset</code></li>
+      <li>Deep thinking mode via Gemini Pro with high-level reasoning</li>
+      <li>Voice prompts and 5 TTS voice options (Puck, Charon, Kore, Fenrir, Zephyr)</li>
+      <li>Google Search grounding for real-time information retrieval</li>
+    </ul>
+  </div>
+
+  <h2 id="editor">9. Advanced Editor (Design Synth)</h2>
+  <div class="card">
+    <ul>
+      <li>Konva canvas with selection, drag, resize</li>
+      <li>Box-draw selection tool</li>
+      <li>Eraser brush</li>
+      <li>Text overlay</li>
+      <li>AI inpainting: fill masked regions with generated content</li>
+      <li>AI outpainting: extend images beyond their boundaries</li>
+      <li>Style transfer: restyle entire images with a text prompt</li>
+    </ul>
+  </div>
+
+  <h2 id="machines">10. Supported Machines</h2>
+  <h3>3D Printers</h3>
+  <table>
+    <tr><th>Printer</th><th>Type</th><th>Build Volume</th><th>Materials</th><th>Price</th></tr>
+    <tr><td>Elegoo Saturn 3 Ultra</td><td>MSLA Resin</td><td>218×122×260mm</td><td>Standard/ABS-Like Resin</td><td>$299</td></tr>
+    <tr><td>Formbot T-Rex 2+</td><td>FDM / IDEX</td><td>400×400×500mm</td><td>PLA, PETG, ABS, TPU, Nylon</td><td>$799</td></tr>
+    <tr><td>Bambu Lab P1S</td><td>FDM / CoreXY</td><td>256×256×256mm</td><td>PLA, PETG, ABS, ASA, TPU</td><td>$699</td></tr>
+    <tr><td>Prusa MK4S</td><td>FDM / Bedslinger</td><td>250×210×220mm</td><td>PLA, PETG, ASA, ABS, Flex</td><td>$799</td></tr>
+    <tr><td>Creality K1 Max</td><td>FDM / CoreXY</td><td>300×300×300mm</td><td>PLA, PETG, ABS, Nylon, TPU</td><td>$599</td></tr>
+  </table>
+  <h3>Laser Cutters / Engravers</h3>
+  <table>
+    <tr><th>Machine</th><th>Type</th><th>Work Area</th><th>Power</th><th>Price</th></tr>
+    <tr><td>ACMER S1</td><td>Diode</td><td>130×130mm</td><td>2.5W</td><td>$89</td></tr>
+    <tr><td>xTool D1 Pro 20W</td><td>Diode</td><td>432×406mm</td><td>20W</td><td>$599</td></tr>
+    <tr><td>Glowforge Pro</td><td>CO2</td><td>495×279mm</td><td>45W</td><td>$6,995</td></tr>
+    <tr><td>OMTech 60W CO2</td><td>CO2</td><td>508×305mm</td><td>60W</td><td>$2,299</td></tr>
+    <tr><td>Ortur Laser Master 3</td><td>Diode</td><td>400×400mm</td><td>10W</td><td>$349</td></tr>
+  </table>
+  <h3>Label Printers</h3>
+  <table>
+    <tr><th>Printer</th><th>Type</th><th>Max Width</th><th>DPI</th><th>Speed</th></tr>
+    <tr><td>Munbyn ITPP130B</td><td>Direct Thermal</td><td>108mm</td><td>203</td><td>150 mm/s</td></tr>
+  </table>
+
+  <h2 id="security">11. Security</h2>
+  <div class="card">
+    <ul>
+      <li>Google OAuth 2.0 via Cloudflare Pages Functions</li>
+      <li>JWT sessions in HttpOnly Secure SameSite=Lax cookies (7-day expiry)</li>
+      <li>All project data scoped to authenticated user via JWT claims</li>
+      <li>API middleware verifies ownership on every mutation</li>
+      <li>SQL injection prevented via D1 parameterized bindings</li>
+      <li>OAuth credentials and JWT secret stored as Cloudflare Pages secrets</li>
+      <li>API keys injected at build time via Vite environment variables</li>
+    </ul>
+  </div>
+
+  <h2 id="api">12. AI Model Reference</h2>
+  <table>
+    <tr><th>Model</th><th>Usage</th><th>Notes</th></tr>
+    <tr><td><code>gemini-3.1-flash-image-preview</code></td><td>Design generation, AI canvas (inpaint/outpaint/style), label design</td><td>Image-in, image-out</td></tr>
+    <tr><td><code>gemini-3.1-pro-preview</code></td><td>Blueprint generation, material analysis, expert advisor</td><td>Deep thinking mode</td></tr>
+    <tr><td><code>gemini-3-flash-preview</code></td><td>Chat advisor, audio transcription</td><td>Fast responses</td></tr>
+    <tr><td><code>gemini-3.1-flash-tts-preview</code></td><td>Text-to-speech for advisor</td><td>5 voices: Puck, Charon, Kore, Fenrir, Zephyr</td></tr>
+  </table>
+
+  <h2 id="setup">13. Setup & Configuration</h2>
+  <div class="card">
+    <h3>Prerequisites</h3>
+    <ul>
+      <li>Node.js 18+</li>
+      <li>Google Gemini API Key</li>
+      <li>Cloudflare account with Pages and D1</li>
+      <li>Google Cloud OAuth 2.0 Client ID</li>
+    </ul>
+    <h3>Quick Start</h3>
+    <pre><code>git clone https://github.com/danieljtrujillo/substrata-by-gantasmo.git
+cd substrata-by-gantasmo
+npm install
+cp .env.example .env   # Add your VITE_GEMINI_API_KEY
+npm run dev             # http://localhost:3000</code></pre>
+    <h3>Commands</h3>
+    <table>
+      <tr><th>Command</th><th>Description</th></tr>
+      <tr><td><code>npm run dev</code></td><td>Vite dev server (port 3000)</td></tr>
+      <tr><td><code>npm run dev:full</code></td><td>Full dev with Wrangler (Pages Functions + D1)</td></tr>
+      <tr><td><code>npm run build</code></td><td>Production build</td></tr>
+      <tr><td><code>npm run preview</code></td><td>Preview with Wrangler</td></tr>
+      <tr><td><code>npm run db:migrate</code></td><td>Apply D1 schema to production</td></tr>
+      <tr><td><code>npm run lint</code></td><td>TypeScript type checking</td></tr>
+    </table>
+    <h3>Environment Variables</h3>
+    <pre><code># .env
+VITE_GEMINI_API_KEY=your_gemini_api_key
+
+# Cloudflare Secrets (set via dashboard)
+GOOGLE_CLIENT_ID=your_google_oauth_client_id
+GOOGLE_CLIENT_SECRET=your_google_oauth_client_secret
+JWT_SECRET=your_jwt_secret</code></pre>
+  </div>
+
+  <hr>
+  <p style="text-align: center; color: var(--muted); font-size: 0.75rem; margin-top: 2rem;">
+    SUBSTRATA v1.0.0 by GANTASMO — Generated Documentation<br>
+    <a href="https://gantasmo.ai" style="color: var(--accent);">gantasmo.ai</a> •
+    <a href="https://github.com/danieljtrujillo/substrata-by-gantasmo" style="color: var(--accent);">GitHub</a>
+  </p>
+</body>
+</html>

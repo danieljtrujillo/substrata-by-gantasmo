@@ -145,3 +145,117 @@ function distributeError(data: Uint8ClampedArray, x: number, y: number, width: n
     data[i + 2] = data[i];
   }
 }
+
+/**
+ * Generate an SVG silhouette outline from an image.
+ * Uses alpha channel (or luminance for opaque images) + edge detection
+ * to create a vector cut path suitable for laser cutting stickers to shape.
+ */
+export const generateEdgeSilhouette = async (
+  imageSource: string,
+  threshold: number = 128,
+  simplify: number = 2
+): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return reject("Could not get canvas context");
+
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx.drawImage(img, 0, 0);
+
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imageData.data;
+      const w = canvas.width;
+      const h = canvas.height;
+
+      // Create binary mask: 1 = content, 0 = background
+      const mask = new Uint8Array(w * h);
+      for (let i = 0; i < data.length; i += 4) {
+        const alpha = data[i + 3];
+        if (alpha < 10) {
+          mask[i / 4] = 0; // transparent = background
+        } else {
+          const luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+          mask[i / 4] = luma < threshold ? 1 : (alpha > 200 ? 1 : 0);
+        }
+      }
+
+      // Find boundary pixels (content pixels adjacent to background)
+      const edgePoints: { x: number; y: number }[] = [];
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          if (mask[y * w + x] === 0) continue;
+          // Check 4-neighbors for background
+          const neighbors = [
+            y > 0 ? mask[(y - 1) * w + x] : 0,
+            y < h - 1 ? mask[(y + 1) * w + x] : 0,
+            x > 0 ? mask[y * w + (x - 1)] : 0,
+            x < w - 1 ? mask[y * w + (x + 1)] : 0,
+          ];
+          if (neighbors.some(n => n === 0)) {
+            edgePoints.push({ x, y });
+          }
+        }
+      }
+
+      if (edgePoints.length === 0) {
+        // Fallback: rectangular outline
+        resolve(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}">
+          <rect x="1" y="1" width="${w - 2}" height="${h - 2}" fill="none" stroke="red" stroke-width="0.5"/>
+        </svg>`);
+        return;
+      }
+
+      // Order points by angle from centroid to create continuous path
+      const cx = edgePoints.reduce((s, p) => s + p.x, 0) / edgePoints.length;
+      const cy = edgePoints.reduce((s, p) => s + p.y, 0) / edgePoints.length;
+      edgePoints.sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
+
+      // Simplify: take every Nth point
+      const simplified = edgePoints.filter((_, i) => i % simplify === 0);
+      if (simplified.length < 3) {
+        resolve(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}">
+          <rect x="1" y="1" width="${w - 2}" height="${h - 2}" fill="none" stroke="red" stroke-width="0.5"/>
+        </svg>`);
+        return;
+      }
+
+      // Build SVG path
+      let pathD = `M ${simplified[0].x} ${simplified[0].y}`;
+      for (let i = 1; i < simplified.length; i++) {
+        pathD += ` L ${simplified[i].x} ${simplified[i].y}`;
+      }
+      pathD += ' Z';
+
+      // Add offset margin (1px outward from centroid)
+      const offsetPath = simplified.map(p => {
+        const dx = p.x - cx;
+        const dy = p.y - cy;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        return { x: p.x + (dx / dist) * 2, y: p.y + (dy / dist) * 2 };
+      });
+      let cutD = `M ${offsetPath[0].x.toFixed(1)} ${offsetPath[0].y.toFixed(1)}`;
+      for (let i = 1; i < offsetPath.length; i++) {
+        cutD += ` L ${offsetPath[i].x.toFixed(1)} ${offsetPath[i].y.toFixed(1)}`;
+      }
+      cutD += ' Z';
+
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}mm" height="${h}mm">
+  <!-- Inner silhouette (reference) -->
+  <path d="${pathD}" fill="none" stroke="#0066ff" stroke-width="0.3" opacity="0.5"/>
+  <!-- Outer cut line (laser cut path with 2px offset) -->
+  <path d="${cutD}" fill="none" stroke="red" stroke-width="0.5"/>
+  <!-- Cut line: red = laser cut path | Blue = design boundary -->
+</svg>`;
+
+      resolve(svg);
+    };
+    img.onerror = reject;
+    img.src = imageSource;
+  });
+};
