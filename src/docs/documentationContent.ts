@@ -49,7 +49,7 @@ Every project in SUBSTRATA follows a pipeline:
 | Laser Fabrication | Material presets, power/speed/passes tuning, PNG/SVG export for laser cutters |
 | AI Prototyping Advisor | Persistent floating panel: design decomposition, component sourcing, fabrication advice, blueprint trigger |
 | Community and References | Pull project ideas and design references from GitHub, Thingiverse, Instructables, Hackaday, GrabCAD, Adafruit Learn |
-| Project Management | Firebase-backed save/load/rename/duplicate with Google Auth |
+| Project Management | Cloud-synced save/load/rename/duplicate with Google OAuth |
 
 ## Technology Stack
 
@@ -58,7 +58,7 @@ Every project in SUBSTRATA follows a pipeline:
 - **3D Engine**: Three.js via React Three Fiber + Drei
 - **Canvas Editor**: Konva + react-konva
 - **AI**: Google Gemini API (3.1 Pro, Flash, Flash Image, Flash TTS)
-- **Backend**: Firebase (Auth + Firestore)
+- **Backend**: Cloudflare (Pages Functions + D1)
 - **Animation**: Motion (Framer Motion successor)
 
 ## Design Language
@@ -613,7 +613,7 @@ Cloud-backed project management with Google authentication.
 
 ### Features
 - **New Project**: Start fresh
-- **Saved Projects**: Auto-synced to Firestore with thumbnails
+- **Saved Projects**: Auto-synced to Cloudflare D1 with thumbnails
 - **Project Actions**: Open, Rename, Duplicate, Share (clipboard), Delete
 - **Stock Templates**: Curated templates across categories (Animal, Decor, Home, Gift, Nature, Fantasy, Mechanical, Nautical)
 - **Batch Import**: Add all templates to your library in one click
@@ -734,13 +734,13 @@ Stops any currently playing TTS audio.
 ## projectService.ts
 
 ### \`saveProject(project)\`
-Creates or updates a project in Firestore.
+Creates or updates a project via the Cloudflare API.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | project | Partial\\<Project\\> | Project data (id, name, images, settings) |
 
-**Path**: \`users/{uid}/projects/{projectId}\`
+**Endpoint**: \`POST /api/projects\`
 
 ### \`getProjects()\`
 Fetches all projects for the authenticated user, ordered by \`updatedAt\` descending.
@@ -800,64 +800,35 @@ interface ImageProcessOptions {
 # Security Architecture
 
 ## Authentication
-- **Provider**: Firebase Authentication with Google Sign-In
-- **Requirement**: Email must be verified (\`email_verified == true\`)
-- **Session**: Managed by Firebase SDK (automatic token refresh)
+- **Provider**: Google OAuth 2.0 via Cloudflare Pages Functions
+- **Requirement**: Email must be verified by Google
+- **Session**: JWT in HttpOnly Secure SameSite=Lax cookie (7-day expiry)
 
 ## Data Isolation
-All user data is strictly sandboxed under \`/users/{auth.uid}/\`. Cross-user access is impossible at the database level.
+All project data is scoped to the authenticated user via JWT claims. API middleware verifies the JWT and enforces ownership on every request.
 
-## Firestore Security Rules
+## API Access Control
 
 ### Access Control Matrix
 
-| Operation | Path | Rule |
-|-----------|------|------|
-| Read Profile | \`/users/{uid}/profile\` | Owner only |
-| Create Profile | \`/users/{uid}/profile\` | Owner + valid schema + server timestamp |
-| Update Profile | \`/users/{uid}/profile\` | Owner + only displayName/photoURL mutable |
-| List Projects | \`/users/{uid}/projects\` | Owner only |
-| Get Project | \`/users/{uid}/projects/{pid}\` | Owner only |
-| Create Project | \`/users/{uid}/projects/{pid}\` | Owner + valid ID + valid schema |
-| Update Project | \`/users/{uid}/projects/{pid}\` | Owner + immutable: id, userId, createdAt |
-| Delete Project | \`/users/{uid}/projects/{pid}\` | Owner only |
+| Operation | Endpoint | Rule |
+|-----------|----------|------|
+| List Projects | \`GET /api/projects\` | Authenticated user, own projects only |
+| Create Project | \`POST /api/projects\` | Authenticated user |
+| Update Project | \`PUT /api/projects/:id\` | Owner only |
+| Delete Project | \`DELETE /api/projects/:id\` | Owner only |
+| Get Session | \`GET /api/auth/me\` | Returns null if unauthenticated |
 
-### Validation Rules
-- **ID Format**: \`^[a-zA-Z0-9_\\-]+$\`, max 128 characters
-- **Project Schema**: Required fields: id, name, userId, createdAt, updatedAt. Max 10 fields.
-- **Image Size Limit**: 1MB per image field (originalImage, processedImage)
-- **Name Length**: Max 128 characters
-- **Timestamp Integrity**: createdAt set once on creation, updatedAt must equal server time
-
-### Security Test Vectors ("Dirty Dozen")
-12 attack vectors tested and verified:
-
-1. Identity Spoofing: DENIED
-2. Omission Attack: DENIED  
-3. Immutability Breach: DENIED
-4. Cross-User Read: DENIED
-5. Cross-User Delete: DENIED
-6. Ghost Field Injection: DENIED
-7. Temporal Spoofing: DENIED
-8. Resource Poisoning: DENIED
-9. Unauthenticated Write: DENIED
-10. Profile Hijacking: DENIED
-11. Malformed ID: DENIED
-12. State Shortcutting: DENIED
+### Security Measures
+- **JWT Signing**: HMAC-SHA256 via Web Crypto API
+- **Cookie Security**: HttpOnly (no JS access), Secure (HTTPS only), SameSite=Lax
+- **Ownership Enforcement**: Every mutation verifies \`user_id\` matches JWT \`sub\` claim
+- **SQL Injection Prevention**: All queries use parameterized bindings via D1 API
 
 ## API Key Management
 - Gemini API key is injected at build time via Vite's \`define\` plugin
-- All keys loaded from \`.env\` file (not committed to version control)
-- Firebase config loaded from environment variables
-
-## Global Safety Net
-A catch-all rule denies all reads and writes by default:
-\`\`\`
-match /{document=**} {
-  allow read, write: if false;
-}
-\`\`\`
-Specific paths are then explicitly opened with validation.
+- OAuth credentials stored as Cloudflare Pages secrets (never exposed to frontend)
+- JWT secret stored as Cloudflare Pages secret
 `
   },
   {
@@ -871,7 +842,8 @@ Specific paths are then explicitly opened with validation.
 - Node.js 18+
 - npm or yarn
 - Google Gemini API Key
-- Firebase Project with Firestore + Auth enabled
+- Cloudflare account (Pages + D1)
+- Google Cloud OAuth 2.0 Client ID
 
 ## Installation
 
@@ -885,7 +857,7 @@ npm install
 
 # Create environment file
 cp .env.example .env
-# Edit .env with your API keys and Firebase config
+# Edit .env with your API keys
 
 # Start development server
 npm run dev
@@ -895,33 +867,32 @@ The app will be available at \`http://localhost:3000\`.
 
 ## Environment Variables
 
+### Frontend Environment Variables (\`.env\`)
+
 | Variable | Required | Description |
 |----------|----------|-------------|
-| \`GEMINI_API_KEY\` | Yes | Google Gemini API key for AI features |
-| \`VITE_FIREBASE_API_KEY\` | Yes | Firebase web API key |
-| \`VITE_FIREBASE_AUTH_DOMAIN\` | Yes | Firebase auth domain |
-| \`VITE_FIREBASE_PROJECT_ID\` | Yes | Firebase project ID |
-| \`VITE_FIREBASE_STORAGE_BUCKET\` | Yes | Firebase storage bucket |
-| \`VITE_FIREBASE_MESSAGING_SENDER_ID\` | Yes | Firebase messaging sender ID |
-| \`VITE_FIREBASE_APP_ID\` | Yes | Firebase app ID |
-| \`VITE_FIREBASE_FIRESTORE_DB_ID\` | Yes | Firestore database ID |
-| \`VITE_FIREBASE_MEASUREMENT_ID\` | No | Firebase analytics measurement ID |
+| \`VITE_GEMINI_API_KEY\` | Yes | Google Gemini API key for AI features |
+
+### Cloudflare Pages Secrets (set via dashboard or \`wrangler pages secret put\`)
+
+| Secret | Required | Description |
+|--------|----------|-------------|
+| \`GOOGLE_CLIENT_ID\` | Yes | Google OAuth 2.0 Client ID |
+| \`GOOGLE_CLIENT_SECRET\` | Yes | Google OAuth 2.0 Client Secret |
+| \`JWT_SECRET\` | Yes | Random string for signing session JWTs |
 
 ## Build Commands
 
 | Command | Description |
 |---------|-------------|
-| \`npm run dev\` | Start dev server on port 3000 |
+| \`npm run dev\` | Start Vite dev server on port 3000 |
+| \`npm run dev:full\` | Start with Wrangler (Pages Functions + D1) |
 | \`npm run build\` | Production build to \`dist/\` |
-| \`npm run preview\` | Preview production build |
+| \`npm run preview\` | Preview with Wrangler (Pages Functions + D1) |
+| \`npm run db:migrate\` | Apply D1 schema to production |
+| \`npm run db:migrate:local\` | Apply D1 schema to local dev |
 | \`npm run clean\` | Remove \`dist/\` directory |
 | \`npm run lint\` | TypeScript type checking |
-
-## Deploying Firestore Rules
-
-\`\`\`bash
-firebase deploy --only firestore:rules
-\`\`\`
 
 ## Project Structure Quick Reference
 
@@ -942,13 +913,19 @@ substrata-by-gantasmo/
 │   ├── services/
 │   │   ├── geminiService.ts    # Gemini API + blueprint generation
 │   │   ├── ttsService.ts       # Text-to-speech
-│   │   └── projectService.ts   # Firestore CRUD
+│   │   └── projectService.ts   # D1 API CRUD + localStorage fallback
 │   └── lib/
-│       ├── firebase.ts         # Firebase init + auth
+│       ├── auth.ts             # Cloudflare OAuth + session management
 │       └── imageProcessor.ts   # Image processing pipeline
+├── functions/                  # Cloudflare Pages Functions (API)
+│   ├── jwt.ts                  # JWT sign/verify + cookie helpers
+│   ├── types.ts                # Shared TypeScript types
+│   └── api/
+│       ├── auth/               # OAuth login/callback/logout/me
+│       └── projects/           # CRUD API + auth middleware
 ├── components/ui/              # shadcn/ui components
-├── public/docs/screenshots/    # App feature screenshots
-├── firestore.rules             # Security rules
+├── schema.sql                  # D1 database schema
+├── wrangler.toml               # Cloudflare Pages config
 ├── security_spec.md            # Security test spec
 ├── vite.config.ts              # Vite + Tailwind config
 └── package.json                # Dependencies

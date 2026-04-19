@@ -60,7 +60,7 @@ import {
   Wand2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { onAuthStateChanged, User } from 'firebase/auth';
+import { onAuthStateChanged, CloudflareUser } from './lib/auth';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Stage, PerspectiveCamera, Environment, Grid } from '@react-three/drei';
 import { Button } from "@/components/ui/button";
@@ -101,7 +101,7 @@ import {
 } from './services/geminiService';
 import { speakText, cancelSpeech } from './services/ttsService';
 import { ACMER_S1_PARAMETERS, ACMER_S1_MANUAL_SUMMARY, PROJECT_TEMPLATES, LaserSettings } from './constants';
-import { auth, loginWithGoogle, logout, FIREBASE_AVAILABLE } from './lib/firebase';
+import { loginWithGoogle, logout, AUTH_AVAILABLE } from './lib/auth';
 import { AdvancedEditor } from './components/AdvancedEditor';
 import { DocumentationViewer } from './components/DocumentationViewer';
 import { saveProject, getProjects, deleteProject, renameProject, LaserProject } from './services/projectService';
@@ -217,18 +217,13 @@ export default function App() {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
-  // Firebase State
-  const [user, setUser] = useState<User | null>(null);
+  // Auth State
+  const [user, setUser] = useState<CloudflareUser | null>(null);
   const [savedProjects, setSavedProjects] = useState<LaserProject[]>([]);
   const [isLoadingProjects, setIsLoadingProjects] = useState(false);
 
   useEffect(() => {
-    if (!auth) {
-      // No Firebase — load local projects
-      fetchProjects();
-      return;
-    }
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribe = onAuthStateChanged((currentUser) => {
       setUser(currentUser);
       fetchProjects();
     });

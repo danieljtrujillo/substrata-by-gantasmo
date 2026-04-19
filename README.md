@@ -12,7 +12,7 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178C6?logo=typescript&logoColor=white)
 ![Vite](https://img.shields.io/badge/Vite-6.2-646CFF?logo=vite&logoColor=white)
 ![Tailwind](https://img.shields.io/badge/Tailwind_CSS-4.1-06B6D4?logo=tailwindcss&logoColor=white)
-![Firebase](https://img.shields.io/badge/Firebase-12-FFCA28?logo=firebase&logoColor=black)
+![Cloudflare](https://img.shields.io/badge/Cloudflare-Pages+D1-F38020?logo=cloudflare&logoColor=white)
 ![Gemini](https://img.shields.io/badge/Gemini_AI-3.1-4285F4?logo=google&logoColor=white)
 
 </div>
@@ -117,7 +117,7 @@ SUBSTRATA structures every project as a pipeline with these stages:
 - Operational statistics and troubleshooting guides
 
 ### 📁 Project Library
-- Google Auth with cloud storage via Firestore
+- Google Auth with cloud storage via Cloudflare D1
 - Save/Load/Rename/Duplicate/Share/Delete projects
 - Curated stock templates across categories
 
@@ -147,7 +147,7 @@ SUBSTRATA structures every project as a pipeline with these stages:
 │      │                                                   │
 │   ┌──┴────────────────────────────────────────────────┐  │
 │   │              Library Layer                         │  │
-│   │  imageProcessor · firebase · constants             │  │
+│   │  imageProcessor · auth · constants                │  │
 │   └──────────────────────────────────────────────────┘   │
 │                                                          │
 │   ┌─────────────────────────────────────────────────┐    │
@@ -156,7 +156,7 @@ SUBSTRATA structures every project as a pipeline with these stages:
 │   └─────────────────────────────────────────────────┘    │
 └──────────────┬──────────────┬──────────────┬─────────────┘
                │              │              │
-          Gemini API    Firebase       Three.js
+          Gemini API    Cloudflare D1    Three.js
                │
     ┌──────────┴──────────────┐
     │  Community APIs          │
@@ -177,7 +177,7 @@ SUBSTRATA structures every project as a pipeline with these stages:
 | 3D Engine | Three.js (React Three Fiber + Drei) |
 | Canvas Editor | Konva + react-konva |
 | AI | Google Gemini API (Pro, Flash, Flash Image, Flash TTS) |
-| Auth and DB | Firebase (Google Auth + Firestore) |
+| Auth and DB | Cloudflare (Google OAuth + D1 SQLite) |
 | Animation | Motion (Framer Motion) |
 | Icons | Lucide React |
 
@@ -197,7 +197,8 @@ SUBSTRATA structures every project as a pipeline with these stages:
 ### Prerequisites
 - Node.js 18+
 - Google Gemini API Key
-- Firebase project with Auth + Firestore enabled
+- Cloudflare account with Pages and D1
+- Google Cloud OAuth 2.0 Client ID
 
 ### Installation
 
@@ -211,10 +212,20 @@ npm install
 
 # Configure environment variables
 cp .env.example .env
-# Edit .env with your API keys and Firebase config
+# Edit .env with your Gemini API key
 
-# Start development server
+# Create D1 database (first time only)
+npx wrangler d1 create substrata-db
+# Update wrangler.toml with the database_id from the output
+
+# Apply database schema
+npm run db:migrate:local
+
+# Start development server (frontend only)
 npm run dev
+
+# Or start with full backend (Pages Functions + D1)
+npm run dev:full
 ```
 
 The app runs at `http://localhost:3000`.
@@ -222,23 +233,27 @@ The app runs at `http://localhost:3000`.
 ### Environment Variables
 
 ```env
-GEMINI_API_KEY=your_gemini_api_key
-VITE_FIREBASE_API_KEY=your_firebase_api_key
-VITE_FIREBASE_AUTH_DOMAIN=your-project.firebaseapp.com
-VITE_FIREBASE_PROJECT_ID=your-project-id
-VITE_FIREBASE_STORAGE_BUCKET=your-project.appspot.com
-VITE_FIREBASE_MESSAGING_SENDER_ID=123456789
-VITE_FIREBASE_APP_ID=your-app-id
-VITE_FIREBASE_FIRESTORE_DB_ID=your-db-id
+VITE_GEMINI_API_KEY=your_gemini_api_key
+```
+
+### Cloudflare Secrets (set via dashboard or `wrangler pages secret put`)
+
+```
+GOOGLE_CLIENT_ID=your_google_oauth_client_id
+GOOGLE_CLIENT_SECRET=your_google_oauth_client_secret
+JWT_SECRET=a_random_secret_string_for_signing_session_tokens
 ```
 
 ### Commands
 
 | Command | Description |
 |---------|-------------|
-| `npm run dev` | Development server (port 3000) |
+| `npm run dev` | Vite dev server (port 3000, frontend only) |
+| `npm run dev:full` | Full dev with Wrangler (Pages Functions + D1) |
 | `npm run build` | Production build |
-| `npm run preview` | Preview production build |
+| `npm run preview` | Preview with Wrangler |
+| `npm run db:migrate` | Apply D1 schema to production |
+| `npm run db:migrate:local` | Apply D1 schema to local dev |
 | `npm run clean` | Remove dist/ |
 | `npm run lint` | TypeScript type checking |
 
@@ -262,22 +277,38 @@ src/
 ├── services/
 │   ├── geminiService.ts         # Gemini API wrapper + blueprint generation
 │   ├── ttsService.ts            # Text-to-speech
-│   └── projectService.ts       # Firestore CRUD
+│   └── projectService.ts        # D1 API CRUD + localStorage fallback
 └── lib/
-    ├── firebase.ts              # Firebase init + auth
+    ├── auth.ts                  # Cloudflare OAuth + session management
     └── imageProcessor.ts        # Image processing pipeline
+
+functions/                       # Cloudflare Pages Functions (API backend)
+├── jwt.ts                       # JWT sign/verify + cookie helpers
+├── types.ts                     # Shared TypeScript types
+└── api/
+    ├── auth/
+    │   ├── login.ts             # Redirect to Google OAuth
+    │   ├── callback.ts          # Exchange code, set JWT cookie
+    │   ├── logout.ts            # Clear session
+    │   └── me.ts                # Get current user from JWT
+    └── projects/
+        ├── _middleware.ts       # Auth verification
+        ├── index.ts             # GET (list) / POST (create)
+        └── [id].ts              # PUT (update) / DELETE
 ```
 
 ---
 
 ## Security
 
-- Firebase Google Sign-In authentication with email verification
-- All data sandboxed under `/users/{uid}/`
-- Firestore rules hardened with schema validation, immutability constraints, and 1MB image limits
-- Catch-all rule blocks all access by default; specific paths whitelisted
-- 12 attack vectors ("Dirty Dozen") verified, see [security_spec.md](security_spec.md)
+- Google OAuth 2.0 authentication via Cloudflare Pages Functions
+- JWT sessions in HttpOnly Secure SameSite=Lax cookies (7-day expiry)
+- All project data scoped to authenticated user via JWT claims
+- API middleware verifies ownership on every mutation
+- SQL injection prevented via D1 parameterized bindings
+- OAuth credentials and JWT secret stored as Cloudflare Pages secrets
 - API keys injected at build time via Vite, never committed to source
+- See [security_spec.md](security_spec.md) for detailed security analysis
 
 ---
 
