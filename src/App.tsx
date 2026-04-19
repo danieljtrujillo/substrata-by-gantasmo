@@ -921,7 +921,7 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden bg-transparent text-white font-sans selection:bg-laser-accent selection:text-black">
+    <div className="flex flex-col overflow-hidden bg-transparent text-white font-sans selection:bg-laser-accent selection:text-black" style={{ height: '100dvh' }}>
       {/* Advanced Editor Modal */}
       <AnimatePresence>
         {isAdvancedEditorOpen && processedImage && (
