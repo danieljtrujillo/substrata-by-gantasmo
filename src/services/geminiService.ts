@@ -3,6 +3,20 @@ import { getComponentDatabaseSummary, getTemplateSummary, DESIGN_PRACTICES, COMM
 
 const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
 
+async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      const status = err?.status ?? err?.httpStatusCode ?? err?.code;
+      const retryable = status === 503 || status === 429 || status === 500;
+      if (!retryable || attempt === maxRetries) throw err;
+      await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
+    }
+  }
+  throw new Error("Retry exhausted");
+}
+
 const SAVE_PRESET_TOOL: FunctionDeclaration = {
   name: "save_material_preset",
   description: "Saves a new material preset with specific laser settings (power, speed, passes, mode). Use this when the user wants to save or remember settings for a material.",
@@ -135,7 +149,7 @@ RULES:
 export async function consultLaserExpert(query: string, history: any[] = [], useThinking: boolean = false) {
   const modelName = useThinking ? "gemini-3.1-pro-preview" : "gemini-3-flash-preview";
   
-  const response = await ai.models.generateContent({
+  const response = await withRetry(() => ai.models.generateContent({
     model: modelName,
     contents: [
       ...history.map(msg => ({
@@ -146,10 +160,11 @@ export async function consultLaserExpert(query: string, history: any[] = [], use
     ],
     config: {
       systemInstruction: ADVISOR_SYSTEM_INSTRUCTION,
-      tools: [{ functionDeclarations: [SAVE_PRESET_TOOL, GENERATE_BLUEPRINT_TOOL] }, { googleSearch: {} }],
+      tools: [{ functionDeclarations: [SAVE_PRESET_TOOL, GENERATE_BLUEPRINT_TOOL], googleSearch: {} }],
+      toolConfig: { includeServerSideToolInvocations: true },
       thinkingConfig: useThinking ? { thinkingLevel: ThinkingLevel.HIGH } : undefined
     }
-  });
+  }));
 
   return {
     text: response.text || "",
@@ -264,7 +279,7 @@ When generating a blueprint:
     ? `\n\nCONTEXT FROM DESIGN ADVISOR SESSION:\n${advisorContext}\n` 
     : '';
 
-  const response = await ai.models.generateContent({
+  const response = await withRetry(() => ai.models.generateContent({
     model: "gemini-3.1-pro-preview",
     contents: `${systemPrompt}
 
@@ -328,7 +343,7 @@ Return exactly as JSON.`,
       },
       thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH }
     }
-  });
+  }));
 
   return JSON.parse(response.text);
 }

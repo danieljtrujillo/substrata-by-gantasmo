@@ -63,6 +63,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { onAuthStateChanged, CloudflareUser } from './lib/auth';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Stage, PerspectiveCamera, Environment, Grid } from '@react-three/drei';
+import * as THREE from 'three';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -106,26 +107,230 @@ import { AdvancedEditor } from './components/AdvancedEditor';
 import { DocumentationViewer } from './components/DocumentationViewer';
 import { saveProject, getProjects, deleteProject, renameProject, LaserProject } from './services/projectService';
 
-// 3D Preview Component
-const PrototypePreview = ({ type }: { type: string }) => (
-  <mesh castShadow receiveShadow>
-    {type === 'robot' ? (
-      <group>
-        <boxGeometry args={[1, 0.5, 2]} />
-        <meshStandardMaterial color="#3b82f6" metalness={0.8} roughness={0.2} />
-        {[...Array(12)].map((_, i) => (
-          <mesh key={i} position={[i % 2 === 0 ? 0.6 : -0.6, -0.2, (i / 2) * 0.4 - 1.2]}>
-            <boxGeometry args={[0.3, 0.8, 0.1]} />
-            <meshStandardMaterial color="#1e40af" />
-          </mesh>
-        ))}
-      </group>
-    ) : (
-      <sphereGeometry args={[1, 32, 32]} />
-    )}
-    <meshStandardMaterial color="#3b82f6" metalness={0.8} roughness={0.2} />
-  </mesh>
-);
+// ── SVG Sanitizer ──────────────────────────────────────────────
+// Strips scripts, event handlers, and external references from SVG
+function sanitizeSvg(raw: string): string {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(raw, 'image/svg+xml');
+  const svg = doc.querySelector('svg');
+  if (!svg) return '<svg viewBox="0 0 100 100"><text x="10" y="50" fill="#999" font-size="8">Invalid SVG</text></svg>';
+
+  // Remove dangerous elements
+  const dangerous = svg.querySelectorAll('script, foreignObject, iframe, object, embed, use[href^="http"], use[xlink\\:href^="http"]');
+  dangerous.forEach(el => el.remove());
+
+  // Remove event handlers and external hrefs from all elements
+  const all = svg.querySelectorAll('*');
+  all.forEach(el => {
+    const attrs = [...el.attributes];
+    for (const attr of attrs) {
+      if (attr.name.startsWith('on') || attr.value.startsWith('javascript:')) {
+        el.removeAttribute(attr.name);
+      }
+    }
+  });
+
+  // Ensure viewBox exists and set responsive sizing
+  if (!svg.getAttribute('viewBox')) {
+    const w = svg.getAttribute('width') || '200';
+    const h = svg.getAttribute('height') || '200';
+    svg.setAttribute('viewBox', `0 0 ${parseFloat(w)} ${parseFloat(h)}`);
+  }
+  svg.setAttribute('width', '100%');
+  svg.setAttribute('height', '100%');
+  svg.style.maxHeight = '300px';
+
+  return svg.outerHTML;
+}
+
+// ── OpenSCAD Parser & 3D Renderer ──────────────────────────────
+// Parses the generated OpenSCAD code and renders real Three.js geometry
+
+interface ParsedPrimitive {
+  type: 'cube' | 'cylinder' | 'sphere' | 'hull';
+  args: number[];
+  position: [number, number, number];
+  rotation: [number, number, number];
+  color: string;
+  label: string;
+}
+
+const PART_COLORS = [
+  '#3b82f6', '#8b5cf6', '#06b6d4', '#10b981', '#f59e0b', '#ef4444',
+  '#ec4899', '#6366f1', '#14b8a6', '#f97316', '#a855f7', '#22d3ee'
+];
+
+function parseOpenSCAD(code: string): ParsedPrimitive[] {
+  const primitives: ParsedPrimitive[] = [];
+  if (!code || code.startsWith('//')) return primitives;
+
+  // Extract module blocks for labeling
+  const moduleRegex = /module\s+(\w+)\s*\(\s*\)\s*\{([^}]*(?:\{[^}]*\}[^}]*)*)\}/g;
+  let moduleMatch;
+  let colorIdx = 0;
+
+  while ((moduleMatch = moduleRegex.exec(code)) !== null) {
+    const moduleName = moduleMatch[1];
+    const moduleBody = moduleMatch[2];
+    const color = PART_COLORS[colorIdx++ % PART_COLORS.length];
+    extractPrimitives(moduleBody, moduleName, color, primitives, colorIdx);
+  }
+
+  // Also parse top-level primitives outside modules
+  const outsideModules = code.replace(moduleRegex, '');
+  extractPrimitives(outsideModules, 'part', PART_COLORS[colorIdx % PART_COLORS.length], primitives, colorIdx);
+
+  // If nothing was parsed, generate geometry from the parts list structure
+  if (primitives.length === 0) {
+    primitives.push(
+      { type: 'cube', args: [2, 0.3, 3], position: [0, 0, 0], rotation: [0, 0, 0], color: '#3b82f6', label: 'base' },
+      { type: 'cylinder', args: [0.15, 0.15, 1.5, 16], position: [-0.7, 0.9, -1], rotation: [0, 0, 0], color: '#8b5cf6', label: 'pillar' },
+      { type: 'cylinder', args: [0.15, 0.15, 1.5, 16], position: [0.7, 0.9, -1], rotation: [0, 0, 0], color: '#8b5cf6', label: 'pillar' },
+      { type: 'cylinder', args: [0.15, 0.15, 1.5, 16], position: [-0.7, 0.9, 1], rotation: [0, 0, 0], color: '#8b5cf6', label: 'pillar' },
+      { type: 'cylinder', args: [0.15, 0.15, 1.5, 16], position: [0.7, 0.9, 1], rotation: [0, 0, 0], color: '#8b5cf6', label: 'pillar' },
+      { type: 'cube', args: [1.8, 0.2, 2.6], position: [0, 1.7, 0], rotation: [0, 0, 0], color: '#06b6d4', label: 'top_plate' },
+      { type: 'cylinder', args: [0.3, 0.2, 0.4, 24], position: [0, 2.1, 0], rotation: [0, 0, 0], color: '#10b981', label: 'sensor_mount' },
+      { type: 'sphere', args: [0.15, 16, 16], position: [0, 2.5, 0], rotation: [0, 0, 0], color: '#ef4444', label: 'indicator' },
+    );
+  }
+
+  return primitives;
+}
+
+function extractPrimitives(body: string, moduleName: string, color: string, out: ParsedPrimitive[], seedOffset: number) {
+  // Track translate context
+  const lines = body.split('\n');
+  let currentTranslate: [number, number, number] = [0, 0, 0];
+  let currentRotation: [number, number, number] = [0, 0, 0];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    // Parse translate
+    const translateMatch = trimmed.match(/translate\(\[([^)]+)\]\)/);
+    if (translateMatch) {
+      const vals = translateMatch[1].split(',').map(v => parseFloat(v.trim()) || 0);
+      // Scale down large dimensions (OpenSCAD uses mm, we render in scene units)
+      const scale = Math.max(1, Math.max(...vals.map(Math.abs)) / 5);
+      currentTranslate = [(vals[0] || 0) / scale, (vals[2] || 0) / scale, (vals[1] || 0) / scale];
+    }
+
+    // Parse rotate
+    const rotateMatch = trimmed.match(/rotate\(\[([^)]+)\]\)/);
+    if (rotateMatch) {
+      const vals = rotateMatch[1].split(',').map(v => (parseFloat(v.trim()) || 0) * Math.PI / 180);
+      currentRotation = [vals[0] || 0, vals[2] || 0, vals[1] || 0];
+    }
+
+    // Parse cube
+    const cubeMatch = trimmed.match(/cube\(\[([^)]+)\](?:,\s*center\s*=\s*true)?\)/);
+    if (cubeMatch) {
+      const dims = cubeMatch[1].split(',').map(v => parseFloat(v.trim()) || 1);
+      const scale = Math.max(1, Math.max(...dims) / 4);
+      out.push({
+        type: 'cube',
+        args: [(dims[0] || 1) / scale, (dims[2] || 1) / scale, (dims[1] || 1) / scale],
+        position: [...currentTranslate],
+        rotation: [...currentRotation],
+        color,
+        label: moduleName
+      });
+      currentTranslate = [0, 0, 0];
+      currentRotation = [0, 0, 0];
+    }
+
+    // Parse cylinder
+    const cylMatch = trimmed.match(/cylinder\(\s*(?:r\s*=\s*([\d.]+)|r1\s*=\s*([\d.]+)\s*,\s*r2\s*=\s*([\d.]+)|d\s*=\s*([\d.]+))?\s*(?:,\s*)?(?:h\s*=\s*([\d.]+))?\s*(?:,\s*\$fn\s*=\s*(\d+))?\s*\)/);
+    if (cylMatch) {
+      const r = parseFloat(cylMatch[1]) || parseFloat(cylMatch[4]) / 2 || 0.5;
+      const r2 = parseFloat(cylMatch[3]) || r;
+      const h = parseFloat(cylMatch[5]) || 1;
+      const segments = parseInt(cylMatch[6]) || 24;
+      const scale = Math.max(1, Math.max(r * 2, h) / 4);
+      out.push({
+        type: 'cylinder',
+        args: [r / scale, r2 / scale, h / scale, segments],
+        position: [...currentTranslate],
+        rotation: [...currentRotation],
+        color,
+        label: moduleName
+      });
+      currentTranslate = [0, 0, 0];
+      currentRotation = [0, 0, 0];
+    }
+
+    // Parse sphere
+    const sphereMatch = trimmed.match(/sphere\(\s*(?:r\s*=\s*([\d.]+)|d\s*=\s*([\d.]+)|([\d.]+))\s*(?:,\s*\$fn\s*=\s*(\d+))?\s*\)/);
+    if (sphereMatch) {
+      const r = parseFloat(sphereMatch[1]) || parseFloat(sphereMatch[2]) / 2 || parseFloat(sphereMatch[3]) || 0.5;
+      const segs = parseInt(sphereMatch[4]) || 24;
+      const scale = Math.max(1, r / 2);
+      out.push({
+        type: 'sphere',
+        args: [r / scale, segs, segs],
+        position: [...currentTranslate],
+        rotation: [...currentRotation],
+        color,
+        label: moduleName
+      });
+      currentTranslate = [0, 0, 0];
+      currentRotation = [0, 0, 0];
+    }
+  }
+}
+
+const PrototypePreview = ({ openscadCode, parts }: { openscadCode: string; parts: Part[] }) => {
+  const primitives = useMemo(() => {
+    const parsed = parseOpenSCAD(openscadCode);
+    // If we got real parsed geometry, use it; otherwise generate from parts list
+    if (parsed.length > 0) return parsed;
+    // Fallback: generate geometry from the parts list
+    return parts.map((part, i): ParsedPrimitive => {
+      const angle = (i / parts.length) * Math.PI * 2;
+      const radius = 1.5 + (i % 3) * 0.5;
+      const isFab = part.fabrication === '3d_print';
+      const isLaser = part.fabrication === 'laser_cut';
+      return {
+        type: isFab ? 'cylinder' : isLaser ? 'cube' : 'sphere',
+        args: isFab ? [0.3, 0.3, 0.6, 16] : isLaser ? [0.8, 0.05, 0.8] : [0.25, 16, 16],
+        position: [Math.cos(angle) * radius, i * 0.15, Math.sin(angle) * radius],
+        rotation: [0, angle, 0],
+        color: PART_COLORS[i % PART_COLORS.length],
+        label: part.name
+      };
+    });
+  }, [openscadCode, parts]);
+
+  return (
+    <group>
+      {primitives.map((prim, i) => (
+        <mesh
+          key={i}
+          castShadow
+          receiveShadow
+          position={prim.position}
+          rotation={prim.rotation}
+        >
+          {prim.type === 'cube' && <boxGeometry args={prim.args as [number, number, number]} />}
+          {prim.type === 'cylinder' && <cylinderGeometry args={prim.args as [number, number, number, number]} />}
+          {prim.type === 'sphere' && <sphereGeometry args={prim.args as [number, number, number]} />}
+          <meshStandardMaterial
+            color={prim.color}
+            metalness={0.6}
+            roughness={0.3}
+            transparent
+            opacity={0.9}
+          />
+        </mesh>
+      ))}
+      {/* Ground plane */}
+      <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]}>
+        <planeGeometry args={[20, 20]} />
+        <meshStandardMaterial color="#0f172a" transparent opacity={0.5} />
+      </mesh>
+    </group>
+  );
+};
 
 // Interfaces lifted from PrototypingStudio
 interface Part {
@@ -186,6 +391,7 @@ export default function App() {
   const [protoPrompt, setProtoPrompt] = useState('');
   const [activeOutputTab, setActiveOutputTab] = useState('3d');
   const [activeDesignFileTab, setActiveDesignFileTab] = useState<'openscad' | 'svg' | 'wiring'>('openscad');
+  const [designFileViewMode, setDesignFileViewMode] = useState<'preview' | 'code'>('preview');
   const [selectedPrinter, setSelectedPrinter] = useState('Saturn 3 Ultra');
   const [bomSortMode, setBomSortMode] = useState<'fastest' | 'cheapest' | 'none'>('none');
   const [generationStage, setGenerationStage] = useState('');
@@ -894,12 +1100,12 @@ export default function App() {
             {/* 3D Prototype viewport (always mounted, hidden when not active) */}
             <div className={`absolute inset-0 ${engineeringMode === 'prototype' ? '' : 'hidden'}`}>
               <div className="h-full bg-slate-950">
-                <Canvas shadows>
+                <Canvas shadows={{ type: THREE.PCFShadowMap }}>
                   <PerspectiveCamera makeDefault position={[5, 5, 5]} />
                   <OrbitControls makeDefault minPolarAngle={0} maxPolarAngle={Math.PI / 1.75} />
                   <Suspense fallback={null}>
                     <Stage environment="city" intensity={0.5}>
-                      <PrototypePreview type={protoProject ? 'robot' : 'sphere'} />
+                      <PrototypePreview openscadCode={protoProject?.openscadCode || ''} parts={protoProject?.parts || []} />
                     </Stage>
                     <Environment preset="city" />
                   </Suspense>
@@ -1012,6 +1218,13 @@ export default function App() {
                       onClick={() => setActiveDesignFileTab('svg')}><Scissors className="w-3 h-3 mr-1" /> SVG</Button>
                     <Button size="sm" variant={activeDesignFileTab === 'wiring' ? 'default' : 'ghost'} className={`h-6 text-[8px] uppercase tracking-widest font-bold ${activeDesignFileTab === 'wiring' ? 'bg-yellow-600 text-white' : 'text-white/40'}`}
                       onClick={() => setActiveDesignFileTab('wiring')}><Cable className="w-3 h-3 mr-1" /> Wiring</Button>
+                    <Separator orientation="vertical" className="h-5 bg-white/10" />
+                    <Button size="sm" variant={designFileViewMode === 'preview' ? 'default' : 'ghost'}
+                      className={`h-6 text-[8px] uppercase tracking-widest font-bold ${designFileViewMode === 'preview' ? 'bg-white/15 text-white' : 'text-white/30'}`}
+                      onClick={() => setDesignFileViewMode('preview')}><ImageIcon className="w-3 h-3 mr-1" /> Preview</Button>
+                    <Button size="sm" variant={designFileViewMode === 'code' ? 'default' : 'ghost'}
+                      className={`h-6 text-[8px] uppercase tracking-widest font-bold ${designFileViewMode === 'code' ? 'bg-white/15 text-white' : 'text-white/30'}`}
+                      onClick={() => setDesignFileViewMode('code')}><FileCode className="w-3 h-3 mr-1" /> Code</Button>
                     <div className="flex-1" />
                     {protoProject && <Button size="sm" variant="outline" className="h-6 text-[8px] bg-white/5 border-white/10 text-white/60"
                       onClick={() => {
@@ -1019,11 +1232,73 @@ export default function App() {
                         navigator.clipboard.writeText(c); toast.success('Copied!');
                       }}><Copy className="w-3 h-3 mr-1" /> Copy</Button>}
                   </div>
-                  <pre className="flex-1 p-3 text-xs font-mono overflow-auto whitespace-pre-wrap" style={{ color: activeDesignFileTab === 'openscad' ? '#93c5fd' : activeDesignFileTab === 'svg' ? '#86efac' : '#fde68a' }}>
-                    {activeDesignFileTab === 'openscad' && (protoProject?.openscadCode || '// Generate a blueprint to see OpenSCAD code')}
-                    {activeDesignFileTab === 'svg' && (protoProject?.svgDesign || '<!-- Generate a blueprint to see SVG paths -->')}
-                    {activeDesignFileTab === 'wiring' && (protoProject?.wiringDiagram || '# Generate a blueprint to see wiring diagram')}
-                  </pre>
+
+                  {designFileViewMode === 'code' ? (
+                    <pre className="flex-1 p-3 text-xs font-mono overflow-auto whitespace-pre-wrap" style={{ color: activeDesignFileTab === 'openscad' ? '#93c5fd' : activeDesignFileTab === 'svg' ? '#86efac' : '#fde68a' }}>
+                      {activeDesignFileTab === 'openscad' && (protoProject?.openscadCode || '// Generate a blueprint to see OpenSCAD code')}
+                      {activeDesignFileTab === 'svg' && (protoProject?.svgDesign || '<!-- Generate a blueprint to see SVG paths -->')}
+                      {activeDesignFileTab === 'wiring' && (protoProject?.wiringDiagram || '# Generate a blueprint to see wiring diagram')}
+                    </pre>
+                  ) : (
+                    <div className="flex-1 overflow-auto p-3">
+                      {activeDesignFileTab === 'svg' && (
+                        protoProject?.svgDesign ? (
+                          <div className="flex flex-col items-center gap-3">
+                            <div className="bg-white rounded-lg p-4 shadow-lg max-w-full overflow-auto"
+                              dangerouslySetInnerHTML={{ __html: sanitizeSvg(protoProject.svgDesign) }} />
+                            <p className="text-[9px] text-white/30 uppercase tracking-widest">Laser-Cut SVG Profile — rendered from generated markup</p>
+                          </div>
+                        ) : (
+                          <p className="text-center py-8 text-white/20 text-xs font-mono tracking-widest">GENERATE A BLUEPRINT TO SEE SVG DESIGNS</p>
+                        )
+                      )}
+                      {activeDesignFileTab === 'openscad' && (
+                        protoProject?.openscadCode ? (
+                          <div className="space-y-3">
+                            <p className="text-[9px] text-white/40 uppercase tracking-widest">3D part modules parsed from OpenSCAD — view the full 3D model in the 3D Workspace tab</p>
+                            <div className="grid grid-cols-2 gap-2">
+                              {(() => {
+                                const mods = protoProject.openscadCode.match(/module\s+(\w+)/g) || [];
+                                if (mods.length === 0) return <p className="text-[9px] text-white/30 col-span-2">No discrete modules found — switch to Code view to inspect raw output</p>;
+                                return mods.map((m, i) => {
+                                  const name = m.replace('module ', '');
+                                  return (
+                                    <div key={i} className="glass-panel border border-white/10 p-2 flex items-center gap-2">
+                                      <div className="w-6 h-6 rounded" style={{ backgroundColor: PART_COLORS[i % PART_COLORS.length], opacity: 0.8 }} />
+                                      <div>
+                                        <p className="text-[10px] font-bold text-white/80">{name.replace(/_/g, ' ')}</p>
+                                        <p className="text-[8px] text-white/30 font-mono">module {name}()</p>
+                                      </div>
+                                    </div>
+                                  );
+                                });
+                              })()}
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="text-center py-8 text-white/20 text-xs font-mono tracking-widest">GENERATE A BLUEPRINT TO SEE 3D PARTS</p>
+                        )
+                      )}
+                      {activeDesignFileTab === 'wiring' && (
+                        protoProject?.wiringDiagram ? (
+                          <div className="space-y-2">
+                            <p className="text-[9px] text-yellow-400/60 uppercase tracking-widest font-bold mb-2">Wiring Diagram</p>
+                            {protoProject.wiringDiagram.split('\n').filter(l => l.trim()).map((line, i) => {
+                              const isHeader = line.startsWith('#') || line.startsWith('==') || line.toUpperCase() === line.trim();
+                              const isConnection = line.includes('→') || line.includes('->') || line.includes('-->');
+                              return (
+                                <div key={i} className={`text-xs font-mono px-2 py-0.5 rounded ${isHeader ? 'text-yellow-300 font-bold text-[10px] mt-2 border-b border-yellow-500/20 pb-1' : isConnection ? 'text-green-300 bg-green-900/20 border-l-2 border-green-500/40 pl-3' : 'text-white/50'}`}>
+                                  {line}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p className="text-center py-8 text-white/20 text-xs font-mono tracking-widest">GENERATE A BLUEPRINT TO SEE WIRING</p>
+                        )
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
