@@ -27,7 +27,7 @@ export interface LaserProject {
 }
 
 const handleFirestoreError = (error: any, operation: string, path: string | null = null) => {
-  const user = auth.currentUser;
+  const user = auth?.currentUser;
   const errorInfo = {
     error: error.message || 'Unknown error',
     operationType: operation,
@@ -49,8 +49,8 @@ const handleFirestoreError = (error: any, operation: string, path: string | null
 };
 
 export const saveProject = async (project: Omit<LaserProject, 'userId' | 'createdAt' | 'updatedAt'>) => {
-  const user = auth.currentUser;
-  if (!user) throw new Error("User must be logged in to save projects");
+  const user = auth?.currentUser;
+  if (!user || !db) throw new Error("User must be logged in to save projects");
 
   const projectPath = `users/${user.uid}/projects/${project.id}`;
   try {
@@ -76,8 +76,8 @@ export const saveProject = async (project: Omit<LaserProject, 'userId' | 'create
 };
 
 export const getProjects = async (): Promise<LaserProject[]> => {
-  const user = auth.currentUser;
-  if (!user) return [];
+  const user = auth?.currentUser;
+  if (!user || !db) return [];
 
   const projectsPath = `users/${user.uid}/projects`;
   try {
@@ -91,8 +91,8 @@ export const getProjects = async (): Promise<LaserProject[]> => {
 };
 
 export const renameProject = async (projectId: string, newName: string) => {
-  const user = auth.currentUser;
-  if (!user) return;
+  const user = auth?.currentUser;
+  if (!user || !db) return;
 
   const projectPath = `users/${user.uid}/projects/${projectId}`;
   try {
@@ -107,8 +107,8 @@ export const renameProject = async (projectId: string, newName: string) => {
 };
 
 export const deleteProject = async (projectId: string) => {
-  const user = auth.currentUser;
-  if (!user) return;
+  const user = auth?.currentUser;
+  if (!user || !db) return;
 
   const projectPath = `users/${user.uid}/projects/${projectId}`;
   try {

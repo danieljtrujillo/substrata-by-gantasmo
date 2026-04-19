@@ -1,6 +1,6 @@
-import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import { initializeApp, type FirebaseApp } from 'firebase/app';
+import { getAuth, GoogleAuthProvider, signInWithPopup, type Auth } from 'firebase/auth';
+import { getFirestore, type Firestore } from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -14,19 +14,42 @@ const firebaseConfig = {
 
 const firestoreDatabaseId = import.meta.env.VITE_FIREBASE_FIRESTORE_DB_ID;
 
-const app = initializeApp(firebaseConfig);
-export const auth = getAuth(app);
-export const db = getFirestore(app, firestoreDatabaseId);
-export const googleProvider = new GoogleAuthProvider();
+const FIREBASE_AVAILABLE = !!firebaseConfig.apiKey;
+
+let app: FirebaseApp | null = null;
+let auth: Auth | null = null;
+let db: Firestore | null = null;
+let googleProvider: GoogleAuthProvider | null = null;
+
+if (FIREBASE_AVAILABLE) {
+  try {
+    app = initializeApp(firebaseConfig);
+    auth = getAuth(app);
+    db = getFirestore(app, firestoreDatabaseId);
+    googleProvider = new GoogleAuthProvider();
+  } catch (e) {
+    console.warn('Firebase init failed — running in offline mode:', e);
+  }
+} else {
+  console.warn('Firebase API key not set — running in offline mode. Auth & cloud save disabled.');
+}
+
+export { auth, db, googleProvider, FIREBASE_AVAILABLE };
 
 export const loginWithGoogle = async () => {
-    try {
-        const result = await signInWithPopup(auth, googleProvider);
-        return result.user;
-    } catch (error) {
-        console.error("Login failed:", error);
-        throw error;
-    }
+  if (!auth || !googleProvider) {
+    throw new Error('Firebase not configured — login unavailable.');
+  }
+  try {
+    const result = await signInWithPopup(auth, googleProvider);
+    return result.user;
+  } catch (error) {
+    console.error("Login failed:", error);
+    throw error;
+  }
 };
 
-export const logout = () => auth.signOut();
+export const logout = () => {
+  if (!auth) return;
+  return auth.signOut();
+};

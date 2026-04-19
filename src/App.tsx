@@ -85,7 +85,7 @@ import {
 } from './services/geminiService';
 import { speakText, cancelSpeech } from './services/ttsService';
 import { ACMER_S1_PARAMETERS, ACMER_S1_MANUAL_SUMMARY, PROJECT_TEMPLATES, LaserSettings } from './constants';
-import { auth, loginWithGoogle, logout } from './lib/firebase';
+import { auth, loginWithGoogle, logout, FIREBASE_AVAILABLE } from './lib/firebase';
 import { AdvancedEditor } from './components/AdvancedEditor';
 import { PrototypingStudio } from './components/PrototypingStudio';
 import { DocumentationViewer } from './components/DocumentationViewer';
@@ -133,6 +133,7 @@ export default function App() {
   const [isLoadingProjects, setIsLoadingProjects] = useState(false);
 
   useEffect(() => {
+    if (!auth) return;
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
       if (currentUser) {

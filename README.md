@@ -1,8 +1,10 @@
 <div align="center">
 
-# SUBSTRATA *by* GANTASMO
+# SUBSTRATA
+### *by*
+# GANTASMO
 
-**AI-Powered Rapid Prototyping Suite**
+**The open-source command center for rogue engineers, garage-lab inventors, and anyone who thinks "buy it off the shelf" is a moral failing.**
 
 *Ideate · Design · Fabricate · Engrave · Ship*
 
@@ -19,11 +21,11 @@
 
 ## Overview
 
-SUBSTRATA is a full-stack rapid prototyping suite that takes your idea from concept to physical object. It combines AI-powered design generation, 2D/3D modeling, image processing, fabrication planning, laser engraving, and cloud project management into one end-to-end pipeline.
+SUBSTRATA is the full-stack prototyping war room you build when you're sick of duct-taping twelve browser tabs together. AI image generation, parametric 3D modeling, laser G-code pipelines, real-time material analysis, wiring diagrams, firmware scaffolding — all wired into one dark-mode glassmorphism cockpit that runs on caffeine and Gemini 3.1.
 
-Whether you're designing a hexapod robot, a custom PCB enclosure, an LED doorknob, or a kinetic sculpture, SUBSTRATA handles every stage — from brainstorming with an AI advisor, through component sourcing and real design file generation (OpenSCAD, SVG, wiring diagrams), to fabrication-ready output.
+Point it at a napkin sketch or scream "hexapod robot" into your mic. The AI advisor decomposes it into subsystems, pulls from a built-in database of 30+ real components and 12 battle-tested design templates, applies DFM rules for your printer and laser, and — when you say the word — generates actual OpenSCAD, SVG cut files, and pin-by-pin wiring in one shot. Then you hit print.
 
-The **persistent AI Design Advisor** sits in the corner of every screen, ready to decompose your idea into subsystems, reference a built-in database of 30+ real components and 12 design templates, apply best design practices for 3D printing and laser cutting, and — when you're ready — trigger full blueprint generation with a single click.
+The **persistent AI Design Advisor** lurks in the corner of every screen — part co-pilot, part enabler, part mad-scientist hype man. It knows your components, your constraints, and community projects across GitHub, Thingiverse, Hackaday, and Instructables. It doesn't just answer questions — it triggers builds.
 
 ### Screenshots
 
