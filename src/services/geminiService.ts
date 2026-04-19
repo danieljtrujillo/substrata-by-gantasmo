@@ -1,4 +1,5 @@
 import { GoogleGenAI, ThinkingLevel, Type, FunctionDeclaration } from "@google/genai";
+import { getComponentDatabaseSummary, getTemplateSummary, DESIGN_PRACTICES, COMMUNITY_SOURCES } from '../designDatabase';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
@@ -31,6 +32,26 @@ const SAVE_PRESET_TOOL: FunctionDeclaration = {
       }
     },
     required: ["name", "power", "speed", "passes", "mode"]
+  }
+};
+
+const GENERATE_BLUEPRINT_TOOL: FunctionDeclaration = {
+  name: "generate_blueprint",
+  description: "Triggers full prototype blueprint generation. Use this when the user has described a sufficient project idea and is ready to build, or says things like 'let's build it', 'design this', 'make it', etc.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      projectDescription: {
+        type: Type.STRING,
+        description: "Comprehensive summary of the project including all discussed features, components, requirements, and design decisions from the conversation."
+      },
+      fabricationPreference: {
+        type: Type.STRING,
+        description: "Primary fabrication approach",
+        enum: ["3d_print", "laser_cut", "mixed"]
+      }
+    },
+    required: ["projectDescription"]
   }
 };
 
@@ -86,14 +107,30 @@ export async function getSmartSettings(material: string, manualContent: string) 
 const ADVISOR_SYSTEM_INSTRUCTION = `You are a world-class rapid prototyping expert and engineering advisor for SUBSTRATA by GANTASMO.
 You have deep expertise across the entire prototyping pipeline: ideation, design, materials, fabrication (3D printing, laser engraving/cutting, CNC), electronics, mechanical engineering, and finishing.
 You are also a specialist on the ACMER S1 laser engraver for the laser fabrication step.
+
+YOUR DESIGN THINKING PROCESS:
+When a user describes a project idea (even vague ones like "LED doorknob" or "hexapod robot"), you should:
+1. DECOMPOSE: Break it into subsystems (structural, mechanical, electrical, software)
+2. SPECIFY: Recommend specific components with real part numbers from your knowledge
+3. FABRICATION: Decide what needs to be 3D printed vs laser cut vs bought off-shelf
+4. REFERENCE: Suggest community designs on GitHub, Thingiverse, Instructables, Hackaday
+5. BUILD: When the user is ready, use the 'generate_blueprint' tool to trigger full blueprint generation
+
+${getComponentDatabaseSummary()}
+
+${DESIGN_PRACTICES}
+
+COMMUNITY SOURCES:
+${COMMUNITY_SOURCES.map(s => `- ${s.platform}: ${s.categories.join(', ')}`).join('\n')}
+
 RULES:
-1. Be brief. High density of information, low word count.
-2. ALWAYS end your response with: "Would you like to know more?" (unless you are confirming a tool call).
-3. If the user wants to save laser settings for a material, trigger the 'save_material_preset' tool.
-4. If asked about a material for laser engraving, suggest specific ACMER S1 settings (Power, Speed, passes) and offer to save them.
-5. For 3D printing questions, provide guidance on printer selection (SLA vs FDM), material choice, print parameters, and design-for-manufacturing tips.
-6. For electronics and mechanical engineering, provide component recommendations, sourcing advice, and design best practices.
-7. Recommend community sources (GitHub, Thingiverse, Instructables, Hackaday) when relevant to the user's project.`;
+1. Be brief but information-dense. Use bullet points and specs.
+2. ALWAYS end your response with a clear next-step suggestion (unless confirming a tool call).
+3. If the user wants to save laser settings, trigger 'save_material_preset'.
+4. When the user is ready to build (says "let's build it", "design this", "make it", etc.), trigger 'generate_blueprint' with a comprehensive project description summarizing the entire conversation.
+5. Proactively reference similar community projects and suggest searching for them.
+6. When recommending components, use specific part names and approximate prices.
+7. Think about what goes into the project systematically: What are ALL the subsystems? What interfaces between them?`;
 
 export async function consultLaserExpert(query: string, history: any[] = [], useThinking: boolean = false) {
   const modelName = useThinking ? "gemini-3.1-pro-preview" : "gemini-3-flash-preview";
@@ -109,7 +146,7 @@ export async function consultLaserExpert(query: string, history: any[] = [], use
     ],
     config: {
       systemInstruction: ADVISOR_SYSTEM_INSTRUCTION,
-      tools: [{ functionDeclarations: [SAVE_PRESET_TOOL] }, { googleSearch: {} }],
+      tools: [{ functionDeclarations: [SAVE_PRESET_TOOL, GENERATE_BLUEPRINT_TOOL] }, { googleSearch: {} }],
       thinkingConfig: useThinking ? { thinkingLevel: ThinkingLevel.HIGH } : undefined
     }
   });
@@ -188,4 +225,110 @@ export async function transcribeSpokenPrompt(audioBase64: string) {
         }
     });
     return response.text;
+}
+
+// ── Enhanced Blueprint Generation ─────────────────────────────
+// Generates full prototype blueprints with actual design files
+
+export async function generateProjectBlueprint(
+  prompt: string,
+  designStyle: string,
+  printer: string,
+  advisorContext: string = ''
+) {
+  const componentDb = getComponentDatabaseSummary();
+  const templateDb = getTemplateSummary();
+
+  const systemPrompt = `You are an expert industrial designer, mechanical engineer, and electronics architect at GANTASMO.
+You ACTUALLY design parts — not just list them. You think through every subsystem, every interface, every fastener.
+
+${componentDb}
+
+${DESIGN_PRACTICES}
+
+DESIGN TEMPLATES REFERENCE:
+${templateDb}
+
+When generating a blueprint:
+1. DECOMPOSE the project into clear subsystems
+2. For each 3D printed part, generate working OpenSCAD code that produces the actual geometry
+3. For each laser-cut part, generate SVG path markup with real dimensions
+4. For electronics, generate a text wiring diagram showing every connection
+5. Use REAL component names and part numbers from the database above
+6. Generate REAL firmware/control code (Arduino/MicroPython) that compiles
+7. Provide step-by-step assembly instructions
+8. Consider tolerances, interference fits, and DFM rules
+`;
+
+  const contextSection = advisorContext 
+    ? `\n\nCONTEXT FROM DESIGN ADVISOR SESSION:\n${advisorContext}\n` 
+    : '';
+
+  const response = await ai.models.generateContent({
+    model: "gemini-3.1-pro-preview",
+    contents: `${systemPrompt}
+
+PROJECT REQUEST: ${prompt}
+${contextSection}
+Configured Printer: ${printer}
+Design Style: ${designStyle}
+
+Generate a complete, actionable prototype blueprint. Every part should be designed, not just named.
+Focus on ${designStyle === 'organic' ? 'fluid, natural curves and voronoi patterns' : 
+          designStyle === 'classical' ? 'balanced, symmetrical traditional details' : 
+          designStyle === 'deconstructivist' ? 'fragmented, non-rectilinear chaotic complexity' : 
+          'clean lines and stark minimal contrast'}.
+
+Return exactly as JSON.`,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          name: { type: Type.STRING },
+          description: { type: Type.STRING },
+          designNotes: { type: Type.STRING, description: "Detailed design rationale, tradeoffs, and key decisions" },
+          parts: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                id: { type: Type.STRING },
+                name: { type: Type.STRING },
+                source: { type: Type.STRING },
+                price: { type: Type.NUMBER },
+                speed: { type: Type.STRING, description: "Delivery: Today, Tomorrow, 2-3 Days, 1-Week" },
+                category: { type: Type.STRING, description: "One of: Structural, Actuator, Electronics, Sensor, Hardware, Power" },
+                specs: { type: Type.STRING },
+                url: { type: Type.STRING },
+                fabrication: { type: Type.STRING, description: "One of: 3d_print, laser_cut, off_shelf" }
+              },
+              required: ["name", "source", "price", "speed", "category"]
+            }
+          },
+          openscadCode: { type: Type.STRING, description: "Complete OpenSCAD code for ALL 3D-printable custom parts. Each part as a module. Include assembly visualization." },
+          svgDesign: { type: Type.STRING, description: "SVG markup for laser-cut parts with real dimensions in mm. Include kerf compensation notes." },
+          wiringDiagram: { type: Type.STRING, description: "Full text wiring diagram showing EVERY connection: component pin → wire color → destination pin" },
+          assemblySteps: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING }
+          },
+          code: { type: Type.STRING, description: "Complete, compilable Arduino/MicroPython firmware for the project" },
+          printingFiles: { 
+            type: Type.ARRAY, 
+            items: { type: Type.STRING }
+          },
+          communityRefs: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: "URLs or search terms for similar projects on GitHub, Thingiverse, Instructables, Hackaday"
+          }
+        },
+        required: ["name", "description", "parts", "code", "printingFiles", "openscadCode", "assemblySteps"]
+      },
+      thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH }
+    }
+  });
+
+  return JSON.parse(response.text);
 }

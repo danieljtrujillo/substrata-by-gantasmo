@@ -38,13 +38,17 @@ Every project in SUBSTRATA follows a pipeline:
 
 | Feature | Description |
 |---------|-------------|
-| **3D Prototyping** | AI-generated hardware blueprints with BOM, STL files, print params, and control code |
+| **3D Prototyping** | AI-generated hardware blueprints with OpenSCAD, SVG laser-cut layouts, wiring diagrams, assembly steps, BOM, and community references |
+| **AI Design Advisor** | Persistent floating panel — decomposes ideas into subsystems, references component DB, triggers blueprint generation |
+| **Component Database** | 30+ real components (servos, MCUs, sensors, LEDs, power, hardware) with specs and prices injected into AI context |
+| **Design Templates** | 12 project archetypes (hexapod, quadruped, robotic arm, rover, doorknob, weather station, keypad, sculpture, lamp, clock, drone, plant monitor) |
+| **Design Practices** | Built-in DFM rules for 3D printing, laser cutting, electronics layout, and mechanical design |
 | **AI Design Generation** | Generate designs from text or voice prompts in 4 styles |
 | **Image Processing** | Floyd-Steinberg dithering, Sobel edge detection, brightness/contrast/threshold |
 | **Advanced Canvas Editor** | Konva-powered editor with AI inpainting, outpainting, and style transfer |
 | **Laser Fabrication** | Material presets, power/speed/passes tuning, PNG/SVG export for laser cutters |
-| **AI Prototyping Advisor** | Full-spectrum expert chat: materials, design, fabrication, electronics, mechanical engineering |
-| **Community Inspiration** | Pull project ideas from GitHub, Thingiverse, Instructables, Hackaday |
+| **AI Prototyping Advisor** | Persistent floating panel: design decomposition, component sourcing, fabrication advice, blueprint trigger |
+| **Community & References** | Pull project ideas and design references from GitHub, Thingiverse, Instructables, Hackaday, GrabCAD, Adafruit Learn |
 | **Project Management** | Firebase-backed save/load/rename/duplicate with Google Auth |
 
 ## Technology Stack
@@ -106,6 +110,8 @@ Browse real-world projects from the maker community:
 | **Thingiverse** | 3D-printable models, remixable designs, parametric files | thingiverse.com |
 | **Instructables** | Step-by-step build guides, multi-discipline projects | instructables.com |
 | **Hackaday** | Hardware hacking, teardowns, engineering deep-dives, IoT projects | hackaday.io |
+| **GrabCAD** | Professional CAD models, engineering references | grabcad.com |
+| **Adafruit Learn** | Electronics tutorials, component guides, wiring diagrams | learn.adafruit.com |
 
 ### Tips for Ideation
 - Search Thingiverse for existing models before designing from scratch — remix is faster than re-inventing
@@ -128,11 +134,22 @@ Turn your concept into a visual design — either 2D artwork or a full 3D hardwa
 ### 3D Design Path (Prototyping Studio)
 1. Describe your hardware project in the Design Objectives textarea
 2. Select your target 3D printer (Saturn 3 Ultra Resin, Formbot T-Rex 2 FDM, or Custom)
-3. Click **GENERATE BLUEPRINT** — Gemini Pro generates a complete project:
+3. Click **GENERATE BLUEPRINT** — Gemini Pro with deep thinking generates a complete project:
+   - OpenSCAD code for parametric 3D parts
+   - SVG layouts for laser-cut flat parts
+   - Wiring diagrams with pin assignments
+   - Numbered assembly steps
    - Interactive 3D model
    - Bill of Materials with pricing and sourcing
-   - STL fabrication files with print parameters
-   - Python/Arduino control code
+   - Design notes and rationale
+   - Community references to similar open-source projects
+
+### Advisor → Blueprint Pipeline
+The AI Design Advisor (floating bottom-right) is tightly integrated with the Prototyping Studio:
+1. Chat with the advisor about your project idea
+2. The advisor decomposes it into subsystems, references the component database, applies design practices
+3. When you're ready, click **Build Blueprint from Discussion** or let the advisor auto-trigger via the \`generate_blueprint\` tool
+4. SUBSTRATA auto-switches to the Engineering > Prototype tab and kicks off full generation with the advisor context injected
 
 ---
 
@@ -177,12 +194,18 @@ Open the full canvas editor for precision work:
 
 Generate the files and specs needed to physically manufacture your design.
 
-### 3D Printing
-The Prototyping Studio generates fabrication-ready output:
+### 3D Printing & Design Files
+The Prototyping Studio generates real, usable design files:
+- **OpenSCAD Code**: Parametric 3D part definitions (\`.scad\`) — render, modify, and print
+- **SVG Laser-Cut Layouts**: Vector paths for flat parts, mounting plates, structural members
+- **Wiring Diagrams**: Pin-by-pin connection tables for microcontrollers, sensors, and actuators
+- **Assembly Steps**: Numbered step-by-step build instructions
 - **STL Files**: Manifests with SLA/FDM print parameters (layer height, exposure time, infill, supports)
 - **Printer Support**: Saturn 3 Ultra (Resin/SLA), Formbot T-Rex 2 (FDM), Custom Industrial
 - **Bill of Materials**: Parts sourced from Amazon, McMaster-Carr, Pololu, Adafruit, Grainger
 - **Sort by**: Cheapest price or fastest shipping (Today, Tomorrow, 2-3 Days, 1-Week)
+- **Design Notes**: AI-generated rationale for design decisions
+- **Community References**: Links to similar open-source projects for further inspiration
 
 ### Control Code
 - Python scripts for motor control, sensor reading, and automation
@@ -418,25 +441,48 @@ Here's how to integrate community sources into your prototyping pipeline:
 
 ## 1. 3D Prototyping Studio
 
-The Prototyping Studio is an AI-powered hardware design engine that generates complete prototyping blueprints from text descriptions.
+The Prototyping Studio is an AI-powered hardware design engine that generates complete prototyping blueprints — including real design files — from text descriptions.
 
 ![3D Prototyping Studio — Generate complete hardware blueprints from text descriptions](/docs/screenshots/01-prototyping-studio.png)
 
 ### Workflow
 1. Describe your hardware project in the Design Objectives textarea
 2. Select your target 3D printer (Saturn 3 Ultra Resin, Formbot T-Rex 2 FDM, or Custom)
-3. Click **GENERATE BLUEPRINT** — Gemini Pro generates a complete project
+3. Click **GENERATE BLUEPRINT** — Gemini Pro with deep thinking generates a complete project
 
 ### Generated Outputs
 - **3D Workspace**: Interactive Three.js viewport with orbit controls and multi-light staging
+- **OpenSCAD Code**: Parametric 3D part definitions — copy and render in OpenSCAD
+- **SVG Laser-Cut Layouts**: Vector paths for flat structural parts, mounting plates, panels
+- **Wiring Diagrams**: Pin-by-pin connection tables for MCUs, sensors, and actuators
+- **Assembly Steps**: Numbered step-by-step build instructions
 - **Bill of Materials**: Parts list with pricing, sourcing (Amazon, McMaster-Carr, Pololu, Adafruit), and shipping speed
-- **Fabrication Files**: STL file manifest with SLA/FDM print parameters (layer height, exposure time, infill, supports)
 - **Control Code**: Python/Arduino code for the prototype
+- **Design Notes**: AI-generated rationale for design decisions
+- **Community References**: Links to similar open-source projects
 
-### BOM Features
-- Sort by **Fastest Ship** or **Cheapest** price
-- Each part shows: name, source, specs, price, delivery estimate
-- External links to suppliers
+### Design File Tabs
+The Fabrication & Design Files view provides three sub-tabs:
+| Tab | Content | Color Theme |
+|-----|---------|-------------|
+| **OpenSCAD** | Parametric 3D part code (\`.scad\`) | Blue |
+| **SVG** | Laser-cut vector paths and layouts | Green |
+| **Wiring** | Pin connection diagrams | Yellow |
+
+Each tab has a copy-to-clipboard button for easy export.
+
+### Component Database Integration
+Blueprint generation pulls from a local database of 30+ real components:
+- **Actuators**: SG90 micro servo, MG996R servo, NEMA 17 stepper, 28BYJ-48 stepper
+- **MCUs**: Arduino Nano, ESP32-WROOM, Raspberry Pi Pico, Teensy 4.0, Seeeduino XIAO
+- **Sensors**: HC-SR04 ultrasonic, MPU6050 IMU, BME280, TCRT5000 IR, HX711 load cell
+- **LEDs/Displays**: WS2812B NeoPixel, 0.96" SSD1306 OLED, 16x2 I2C LCD
+- **Power**: 18650 holders, MT3608 boost converters, LM2596 buck converters
+- **Hardware**: M3 screw kits, brass standoffs, GT2 timing belts, 608 bearings
+
+### Design Template Library
+12 built-in project archetypes with subsystem breakdowns:
+hexapod, quadruped, robotic arm, wheeled rover, LED doorknob, weather station, macro keypad, kinetic sculpture, voronoi lamp, gear clock, drone frame, plant monitor
 
 ---
 
@@ -462,28 +508,39 @@ The Design Studio is where you create, upload, and process 2D designs for fabric
 
 ---
 
-## 3. AI Prototyping Advisor
+## 3. AI Design Advisor (Persistent)
 
-A chat-based AI expert covering the full spectrum of rapid prototyping — materials science, mechanical engineering, electronics, fabrication techniques, design principles, and more.
+A persistent floating panel (bottom-right corner) providing full-spectrum prototyping consultation. Always visible, never buried in a tab.
 
-![AI Prototyping Advisor — Expert chat interface with voice TTS responses](/docs/screenshots/03-advisor-tab.png)
+![AI Design Advisor — Persistent floating panel with voice TTS responses](/docs/screenshots/03-advisor-tab.png)
+
+### How It Works
+The advisor is always available in the bottom-right corner of the screen. Click to expand, collapse when you don't need it. It maintains conversation context across tabs.
 
 ### Capabilities
-- **Full-spectrum prototyping advice**: Materials, design, fabrication, electronics, mechanical engineering, sourcing
-- **Laser engraving expertise**: Material-specific settings, safety, troubleshooting for the ACMER S1
-- **Design critique**: Describe your concept and get engineering feedback
+- **Design decomposition**: Breaks your idea into subsystems, identifies key components, and suggests fabrication methods
+- **Component database**: References 30+ real components with specs and prices (SG90 servo, ESP32, MPU6050, WS2812B, etc.)
+- **Design practices**: Built-in DFM rules for 3D printing (wall thickness, overhangs, supports), laser cutting (kerf, tab joints, living hinges), electronics (power budgets, decoupling, signal routing), and mechanical design (press fits, snap joints, fastener selection)
+- **Blueprint trigger**: When your idea is ready, the advisor calls \`generate_blueprint\` to auto-switch to the Prototyping Studio and kick off full generation
+- **"Build Blueprint from Discussion" button**: Manual trigger to compile your conversation into a generation prompt
 - **Deep Thinking Mode**: Toggle for complex queries (uses Gemini Pro with HIGH thinking level)
 - **Voice I/O**: Voice prompts (mic) and TTS responses (Kore voice, 5 options)
-- **Tool Use**: Can save material presets directly from conversation
-- **Google Search Grounding**: Real-time information retrieval for up-to-date specs and pricing
+- **Tool Use**: Can save material presets and trigger blueprints directly from conversation
+- **Google Search Grounding**: Real-time information retrieval for specs and pricing
+
+### Advisor → Blueprint Flow
+1. Describe your project idea to the advisor
+2. Advisor decomposes it, references component DB, suggests improvements
+3. Click **Build Blueprint from Discussion** or let the advisor auto-trigger
+4. App switches to Engineering > Prototype tab with conversation context injected
+5. Full blueprint generation runs with advisor insights baked in
 
 ### Example Questions
-- "What's the best material for a waterproof electronics enclosure?"
-- "How do I design snap-fit joints for 3D-printed parts?"
-- "What power and speed should I use to engrave on bamboo?"
-- "Compare FDM vs SLA for functional prototypes"
-- "Help me design a living hinge in plywood"
-- "What's the cheapest way to prototype a custom PCB enclosure?"
+- "I want to build a hexapod robot with 18 servos and an ESP32 brain"
+- "What's the best way to design snap-fit joints for 3D-printed parts?"
+- "Help me design a custom macro keypad with Cherry MX switches and RGB LEDs"
+- "Compare resin vs FDM for a waterproof sensor enclosure"
+- "What components do I need for a self-watering plant monitor?"
 
 ---
 
@@ -598,7 +655,7 @@ Analyzes a material image and suggests optimal fabrication approach and settings
 ---
 
 ### \`consultAdvisor(query, history?, useThinking?)\`
-Chat with the AI prototyping advisor.
+Chat with the AI design advisor. The advisor has access to the full component database, design practices library, and community sources.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -610,6 +667,25 @@ Chat with the AI prototyping advisor.
 
 **Tools Available**:
 - \`save_material_preset\` — Saves power/speed/passes settings for a named material
+- \`generate_blueprint\` — Triggers full blueprint generation with a project description
+
+---
+
+### \`generateProjectBlueprint(prompt, designStyle?, printer?, advisorContext?)\`
+Generates a complete prototyping blueprint with OpenSCAD code, SVG layouts, wiring diagrams, assembly steps, BOM, and community references.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| prompt | string | — | Design objectives and project description |
+| designStyle | string | "minimalist" | Design style preference |
+| printer | string | "saturn3ultra" | Target 3D printer |
+| advisorContext | string | "" | Conversation context from the advisor panel |
+
+**Returns**: \`Promise<object>\` — Complete blueprint with name, description, parts[], openscadCode, svgDesign, wiringDiagram, assemblySteps[], code, printingFiles[], designNotes, communityRefs[]
+
+**Model**: Gemini 3.1 Pro Preview with ThinkingLevel.HIGH
+
+**Context Injection**: Automatically injects the component database summary, design template library, and design practices into the system prompt
 
 ---
 
@@ -852,18 +928,19 @@ firebase deploy --only firestore:rules
 \`\`\`
 substrata-by-gantasmo/
 ├── src/
-│   ├── App.tsx                 # Main application
+│   ├── App.tsx                 # Main application + persistent advisor
 │   ├── main.tsx                # React entry point
 │   ├── index.css               # Global styles + glassmorphism theme
 │   ├── constants.ts            # Material presets & templates
+│   ├── designDatabase.ts       # Component DB, design templates, DFM practices
 │   ├── components/
-│   │   ├── PrototypingStudio.tsx   # 3D AI prototyping
+│   │   ├── PrototypingStudio.tsx   # 3D AI prototyping (OpenSCAD/SVG/wiring)
 │   │   ├── AdvancedEditor.tsx      # Konva image editor
 │   │   └── DocumentationViewer.tsx # In-app documentation
 │   ├── docs/
 │   │   └── documentationContent.ts # Documentation data
 │   ├── services/
-│   │   ├── geminiService.ts    # Gemini API wrapper
+│   │   ├── geminiService.ts    # Gemini API + blueprint generation
 │   │   ├── ttsService.ts       # Text-to-speech
 │   │   └── projectService.ts   # Firestore CRUD
 │   └── lib/
@@ -951,9 +1028,13 @@ flowchart LR
         CanvasEdit["Canvas Editor"]
     end
     subgraph Fabricate["4. Fabricate"]
+        OpenSCAD["OpenSCAD (3D Parts)"]
+        SVGCut["SVG (Laser Cut)"]
+        Wiring["Wiring Diagrams"]
         Print3D["3D Print (STL)"]
         BOM["Bill of Materials"]
         Code["Control Code"]
+        Assembly["Assembly Steps"]
     end
     subgraph Finish["5. Finish"]
         LaserEng["Laser Engrave"]
@@ -972,9 +1053,13 @@ flowchart LR
     ImgProc --> Dither
     ImgProc --> Edge
     ImgProc --> CanvasEdit
+    Blueprint --> OpenSCAD
+    Blueprint --> SVGCut
+    Blueprint --> Wiring
     Blueprint --> Print3D
     Blueprint --> BOM
     Blueprint --> Code
+    Blueprint --> Assembly
     Dither --> ExportPNG
     Edge --> ExportSVG
     ExportPNG --> LaserEng
@@ -993,11 +1078,17 @@ sequenceDiagram
     participant PS as PrototypingStudio
     participant FB as Firebase
     U->>App: Describe project idea
+    alt Advisor-Driven Path
+        U->>App: Chat with floating advisor
+        App->>GS: consultAdvisor(query, history)
+        GS-->>App: Design advice + optional generate_blueprint call
+        App->>PS: Auto-switch to Prototype tab with advisor context
+    end
     alt 3D Prototyping Path
         App->>PS: Design objectives + printer selection
-        PS->>GS: Generate blueprint (Gemini Pro)
-        GS-->>PS: 3D model + BOM + STL + Code
-        PS-->>App: Display interactive results
+        PS->>GS: generateProjectBlueprint(prompt, style, printer, advisorContext)
+        GS-->>PS: OpenSCAD + SVG + Wiring + BOM + Assembly + Code
+        PS-->>App: Display interactive results with design file tabs
     end
     alt 2D Design Path
         App->>GS: generateDesign(prompt, style)
@@ -1070,8 +1161,10 @@ export const MERMAID_DIAGRAMS = {
         App["App.tsx — Main Orchestrator"]
         PS["PrototypingStudio.tsx — 3D Hardware Engine"]
         AE["AdvancedEditor.tsx — Canvas Editor"]
+        DDB["designDatabase.ts — Components/Templates"]
+        ADV["Persistent Advisor — Floating Panel"]
         subgraph Services["Service Layer"]
-            GS["geminiService.ts — AI Generation"]
+            GS["geminiService.ts — AI + Blueprint Gen"]
             TTS["ttsService.ts — Text-to-Speech"]
             ProjS["projectService.ts — CRUD"]
         end
@@ -1091,8 +1184,12 @@ export const MERMAID_DIAGRAMS = {
     App --> GS
     App --> TTS
     App --> ProjS
+    ADV -->|trigger blueprint| PS
+    ADV --> GS
     PS --> GS
+    PS --> DDB
     PS --> ThreeJS
+    GS --> DDB
     AE --> GS
     GS --> Gemini
     TTS --> Gemini
@@ -1130,10 +1227,16 @@ export const MERMAID_DIAGRAMS = {
     participant PS as PrototypingStudio
     participant FB as Firebase
     U->>App: Describe project idea
+    alt Advisor Path
+        U->>App: Chat with floating advisor
+        App->>GS: consultAdvisor(query)
+        GS-->>App: Advice + generate_blueprint call
+        App->>PS: Auto-switch with context
+    end
     alt 3D Path
         App->>PS: Generate blueprint
-        PS->>GS: Gemini Pro
-        GS-->>PS: 3D + BOM + STL + Code
+        PS->>GS: generateProjectBlueprint()
+        GS-->>PS: OpenSCAD + SVG + Wiring + BOM
     end
     alt 2D Path
         App->>GS: generateDesign(prompt)

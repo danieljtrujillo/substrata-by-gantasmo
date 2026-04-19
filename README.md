@@ -21,7 +21,9 @@
 
 SUBSTRATA is a full-stack rapid prototyping suite that takes your idea from concept to physical object. It combines AI-powered design generation, 2D/3D modeling, image processing, fabrication planning, laser engraving, and cloud project management into one end-to-end pipeline.
 
-Whether you're designing a robot chassis, a custom PCB enclosure, a laser-cut coaster, or a 3D-printed mount, SUBSTRATA handles every stage — from brainstorming and sourcing parts to generating fabrication-ready files.
+Whether you're designing a hexapod robot, a custom PCB enclosure, an LED doorknob, or a kinetic sculpture, SUBSTRATA handles every stage — from brainstorming with an AI advisor, through component sourcing and real design file generation (OpenSCAD, SVG, wiring diagrams), to fabrication-ready output.
+
+The **persistent AI Design Advisor** sits in the corner of every screen, ready to decompose your idea into subsystems, reference a built-in database of 30+ real components and 12 design templates, apply best design practices for 3D printing and laser cutting, and — when you're ready — trigger full blueprint generation with a single click.
 
 ### Screenshots
 
@@ -42,12 +44,14 @@ SUBSTRATA structures every project as a pipeline with these stages:
 ```
  IDEATE ──→ DESIGN ──→ PROCESS ──→ FABRICATE ──→ FINISH
    │           │          │            │            │
-   │   AI text/voice  Image proc   3D print    Laser engrave
-   │   prompts        dithering    SLA/FDM     marking/cutting
-   │   community      edge detect  BOM/parts   material presets
-   │   inspiration    filters      STL files   export to G-code
-   │                  canvas edit  code gen     PNG/SVG output
-   └── Browse GitHub, Thingiverse, Instructables, Hackaday
+   │   AI Design     Image proc   3D print    Laser engrave
+   │   Advisor        dithering    SLA/FDM     marking/cutting
+   │   (persistent)   edge detect  OpenSCAD    material presets
+   │   Component DB   filters      SVG parts   export to G-code
+   │   Template DB    canvas edit  Wiring      PNG/SVG output
+   │   Design         AI inpaint   Assembly    Community refs
+   │   Practices      outpaint     steps
+   └── Browse GitHub, Thingiverse, Instructables, Hackaday, GrabCAD
 ```
 
 ---
@@ -55,11 +59,16 @@ SUBSTRATA structures every project as a pipeline with these stages:
 ## Features
 
 ### 🧊 3D Prototyping Studio
-- **AI Blueprint Generation**: Describe any hardware project — Gemini Pro generates a complete blueprint with 3D model, BOM, fabrication files, and control code
+- **AI Blueprint Generation**: Describe any hardware project — Gemini Pro with deep thinking generates a complete blueprint with real design files, BOM, assembly instructions, and control code
+- **OpenSCAD Code Generation**: Parametric 3D part definitions — real `.scad` files you can render, modify, and print
+- **SVG Laser-Cut Layouts**: Vector paths for flat parts, mounting plates, structural members — ready for LaserGRBL/LightBurn
+- **Wiring Diagrams**: Pin-by-pin connection tables for microcontrollers, sensors, and actuators
+- **Assembly Steps**: Numbered step-by-step build instructions generated from the design
 - **Interactive 3D Viewer**: Three.js viewport with orbit controls, multi-light staging
 - **Bill of Materials**: Auto-generated parts list with pricing from Amazon, McMaster-Carr, Pololu, Adafruit, Grainger — sortable by price or shipping speed
-- **Fabrication Files**: STL manifest with SLA/FDM print parameters for Saturn 3 Ultra, Formbot T-Rex 2, or custom printers
-- **Control Code**: Python/Arduino code generation for robotics, actuators, and sensors
+- **Design Notes & Community References**: AI-generated design rationale plus links to relevant open-source projects
+- **Component Database Injection**: 30+ real components (servos, MCUs, sensors, LEDs, power supplies) with specs and prices injected into AI context
+- **Template Library**: 12 project archetypes (hexapod, quadruped, robotic arm, wheeled rover, LED doorknob, weather station, macro keypad, kinetic sculpture, voronoi lamp, gear clock, drone frame, plant monitor) with subsystem breakdowns
 
 ### 🎨 Design Studio
 - **AI Design Generation**: Text and voice prompts via Gemini Flash Image — supports 4 design styles (minimalist, deconstructivist, classical, organic)
@@ -79,18 +88,26 @@ SUBSTRATA structures every project as a pipeline with these stages:
 - **Power/Speed/Passes Control**: Fine-tuned parameters for the ACMER S1 diode laser
 - **LaserGRBL/LightBurn Export**: SVG vector output for CNC laser software
 
-### 🤖 AI Prototyping Advisor
-- **Expert Chat**: Full-spectrum prototyping consultant — materials science, design principles, fabrication techniques, electronics, mechanical engineering
+### 🤖 AI Design Advisor (Persistent)
+- **Always Available**: Floating panel in the bottom-right corner of every screen — never buried in a tab
+- **Design Decomposition**: Breaks your idea into subsystems, identifies key components, suggests fabrication methods
+- **Component Database**: References 30+ real components (SG90 servos, ESP32, Arduino Nano, MPU6050, WS2812B LEDs, etc.) with specs and prices
+- **Design Practices Library**: Built-in DFM rules for 3D printing, laser cutting, electronics layout, and mechanical design
+- **Blueprint Trigger**: When your idea is ready, the advisor calls `generate_blueprint` to auto-switch to the Prototyping Studio and kick off full generation
+- **"Build Blueprint from Discussion" Button**: Manual trigger to compile your conversation into a blueprint prompt
 - **Deep Thinking Mode**: Complex query analysis via Gemini Pro with high-level reasoning
 - **Voice I/O**: Voice prompts and TTS responses (5 voice options)
-- **Tool Use**: Can save material presets and configurations directly from conversation
+- **Tool Use**: Can save material presets and trigger blueprint generation directly from conversation
 - **Google Search Grounding**: Real-time information retrieval
 
-### 🌐 Community Inspiration
+### 🌐 Community Inspiration & Reference Databases
 - **GitHub**: Search and browse open-source hardware projects, reference designs, and firmware
 - **Thingiverse**: Discover 3D-printable models and remixable designs
 - **Instructables**: Step-by-step project guides and build tutorials
 - **Hackaday**: Hardware hacking projects, teardowns, and engineering write-ups
+- **GrabCAD**: Professional CAD models and engineering references
+- **Adafruit Learn**: Electronics tutorials and component guides
+- **Auto-Injected Context**: Community sources are automatically referenced in AI advisor and blueprint generation prompts
 
 ### 🔒 Machine Maintenance
 - Safety status monitoring (goggles, exhaust)
@@ -112,30 +129,39 @@ SUBSTRATA structures every project as a pipeline with these stages:
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────┐
-│               Browser Client (React)                  │
-│                                                       │
-│   App.tsx ─── PrototypingStudio ─── AdvancedEditor    │
-│      │                                                │
-│   ┌──┴───────────────────────────────────────────┐    │
-│   │              Service Layer                    │    │
-│   │  geminiService · ttsService · projectService  │    │
-│   └──┬───────────────────────────────────────────┘    │
-│      │                                                │
-│   ┌──┴───────────────────────────────────────────┐    │
-│   │              Library Layer                    │    │
-│   │  imageProcessor · firebase · constants        │    │
-│   └──────────────────────────────────────────────┘    │
-└──────────────┬──────────────┬──────────────┬──────────┘
+┌──────────────────────────────────────────────────────────┐
+│                 Browser Client (React)                    │
+│                                                          │
+│   App.tsx ─── PrototypingStudio ─── AdvancedEditor       │
+│      │              │                                    │
+│      │        designDatabase.ts                          │
+│      │        (templates · components · practices)        │
+│      │                                                   │
+│   ┌──┴────────────────────────────────────────────────┐  │
+│   │              Service Layer                         │  │
+│   │  geminiService · ttsService · projectService       │  │
+│   │  (blueprint gen · advisor · design file output)    │  │
+│   └──┬────────────────────────────────────────────────┘  │
+│      │                                                   │
+│   ┌──┴────────────────────────────────────────────────┐  │
+│   │              Library Layer                         │  │
+│   │  imageProcessor · firebase · constants             │  │
+│   └──────────────────────────────────────────────────┘   │
+│                                                          │
+│   ┌─────────────────────────────────────────────────┐    │
+│   │  Persistent Advisor Panel (floating, bottom-right)│   │
+│   │  → triggers blueprint gen via tool call           │   │
+│   └─────────────────────────────────────────────────┘    │
+└──────────────┬──────────────┬──────────────┬─────────────┘
                │              │              │
           Gemini API    Firebase       Three.js
                │
-    ┌──────────┴──────────┐
-    │  Community APIs     │
-    │  GitHub · Thingiverse│
-    │  Instructables       │
-    │  Hackaday            │
-    └─────────────────────┘
+    ┌──────────┴──────────────┐
+    │  Community APIs          │
+    │  GitHub · Thingiverse    │
+    │  Instructables · Hackaday│
+    │  GrabCAD · Adafruit Learn│
+    └─────────────────────────┘
 ```
 
 ### Technology Stack
@@ -220,18 +246,19 @@ VITE_FIREBASE_FIRESTORE_DB_ID=your-db-id
 
 ```
 src/
-├── App.tsx                      # Main application (1700+ lines)
+├── App.tsx                      # Main application + persistent advisor panel
 ├── main.tsx                     # React entry point
 ├── index.css                    # Global styles + glassmorphism theme
 ├── constants.ts                 # Material presets & project templates
+├── designDatabase.ts            # Component DB, design templates, DFM practices
 ├── components/
-│   ├── PrototypingStudio.tsx    # 3D AI prototyping engine
+│   ├── PrototypingStudio.tsx    # 3D AI prototyping engine (OpenSCAD/SVG/wiring)
 │   ├── AdvancedEditor.tsx       # Konva canvas editor
 │   └── DocumentationViewer.tsx  # In-app docs with export
 ├── docs/
 │   └── documentationContent.ts  # Documentation data
 ├── services/
-│   ├── geminiService.ts         # Gemini API wrapper
+│   ├── geminiService.ts         # Gemini API wrapper + blueprint generation
 │   ├── ttsService.ts            # Text-to-speech
 │   └── projectService.ts       # Firestore CRUD
 └── lib/

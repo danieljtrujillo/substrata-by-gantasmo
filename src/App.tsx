@@ -96,6 +96,8 @@ export default function App() {
   const [engineeringMode, setEngineeringMode] = useState<'laser' | 'prototype'>('prototype');
   const [designStyle, setDesignStyle] = useState<'minimalist' | 'deconstructivist' | 'classical' | 'organic'>('minimalist');
   const [isAdvisorMuted, setIsAdvisorMuted] = useState(false);
+  const [advisorExpanded, setAdvisorExpanded] = useState(false);
+  const [advisorAutoPrompt, setAdvisorAutoPrompt] = useState('');
   const [isAdvancedEditorOpen, setIsAdvancedEditorOpen] = useState(false);
   const [materialPresets, setMaterialPresets] = useState<Record<string, LaserSettings>>(ACMER_S1_PARAMETERS);
   const [originalImage, setOriginalImage] = useState<string | null>(null);
@@ -418,6 +420,14 @@ export default function App() {
     setLaserSettings(settings);
   };
 
+  const handleBuildBlueprint = (projectDescription: string) => {
+    // Switch to Engineering > Prototype mode 
+    setActiveTab('engineering');
+    setEngineeringMode('prototype');
+    setAdvisorAutoPrompt(projectDescription);
+    toast.success("Blueprint generation triggered from Advisor!");
+  };
+
   const handleAnalyzeMaterial = async () => {
     if (!originalImage) return;
     setIsAnalyzing(true);
@@ -499,9 +509,6 @@ export default function App() {
             <TabsList className="glass-panel p-0.5 h-9 rounded-lg mb-4 flex border-white/10">
               <TabsTrigger value="engineering" className="px-4 rounded-lg data-[state=active]:bg-white/10 data-[state=active]:text-laser-accent data-[state=active]:shadow-inner text-white/70 text-xs">
                 <Cpu className="w-3.5 h-3.5 mr-1.5" /> Engineering
-              </TabsTrigger>
-              <TabsTrigger value="consultant" className="px-4 rounded-lg data-[state=active]:bg-white/10 data-[state=active]:text-laser-accent data-[state=active]:shadow-inner text-white/70 text-xs">
-                <MessageSquare className="w-3.5 h-3.5 mr-1.5" /> Advisor
               </TabsTrigger>
               <TabsTrigger value="maintenance" className="px-4 rounded-lg data-[state=active]:bg-white/10 data-[state=active]:text-laser-accent data-[state=active]:shadow-inner text-white/70 text-xs">
                 <Settings className="w-3.5 h-3.5 mr-1.5" /> Maintenance
@@ -683,19 +690,9 @@ export default function App() {
                 </TabsContent>
 
                 <TabsContent value="prototype" className="m-0 h-[720px] animate-in fade-in slide-in-from-right-2 duration-300 overflow-hidden">
-                  <PrototypingStudio designStyle={designStyle} />
+                  <PrototypingStudio designStyle={designStyle} autoPrompt={advisorAutoPrompt} />
                 </TabsContent>
               </Tabs>
-            </TabsContent>
-
-            <TabsContent value="consultant" className="m-0">
-               <div className="h-[650px] flex flex-col">
-                  <ConsultantInterface 
-                    isMuted={isAdvisorMuted} 
-                    onToggleMute={() => setIsAdvisorMuted(!isAdvisorMuted)} 
-                    onSavePreset={handleSaveMaterialPreset}
-                  />
-               </div>
             </TabsContent>
 
             <TabsContent value="maintenance" className="m-0">
@@ -1127,7 +1124,31 @@ export default function App() {
           )}
         </aside>
       </main>
-      <Toaster position="bottom-right" />
+
+      {/* Persistent Floating Advisor Panel */}
+      <div className={`fixed bottom-4 right-4 z-[60] transition-all duration-300 ${advisorExpanded ? 'w-[400px] h-[520px]' : 'w-auto h-auto'}`}>
+        {advisorExpanded ? (
+          <div className="w-full h-full">
+            <ConsultantInterface 
+              isMuted={isAdvisorMuted} 
+              onToggleMute={() => setIsAdvisorMuted(!isAdvisorMuted)}
+              onSavePreset={handleSaveMaterialPreset}
+              onBuildBlueprint={handleBuildBlueprint}
+              onCollapse={() => setAdvisorExpanded(false)}
+            />
+          </div>
+        ) : (
+          <button 
+            onClick={() => setAdvisorExpanded(true)} 
+            className="group relative p-3.5 rounded-2xl bg-black/80 backdrop-blur-xl border border-cyan-500/30 shadow-lg shadow-cyan-500/10 hover:shadow-cyan-500/30 hover:border-cyan-400/60 transition-all duration-300 hover:scale-105"
+          >
+            <MessageSquare className="w-5 h-5 text-cyan-400 group-hover:text-cyan-300 transition-colors" />
+            <span className="absolute -top-1 -right-1 w-3 h-3 bg-cyan-400 rounded-full animate-pulse" />
+          </button>
+        )}
+      </div>
+
+      <Toaster position="bottom-left" />
     </div>
   );
 }
@@ -1135,14 +1156,18 @@ export default function App() {
 function ConsultantInterface({ 
   isMuted, 
   onToggleMute,
-  onSavePreset
+  onSavePreset,
+  onBuildBlueprint,
+  onCollapse
 }: { 
   isMuted: boolean, 
   onToggleMute: () => void,
-  onSavePreset: (name: string, settings: LaserSettings) => void
+  onSavePreset: (name: string, settings: LaserSettings) => void,
+  onBuildBlueprint: (description: string) => void,
+  onCollapse: () => void
 }) {
   const [messages, setMessages] = useState<{ role: 'user' | 'assistant', content: string }[]>([
-    { role: 'assistant', content: "SUBSTRATA NEURAL ADVISOR online. Technical protocols initialized for ACMER S1. System by GANTASMO. Would you like to know more?" }
+    { role: 'assistant', content: "SUBSTRATA Design Advisor online. Tell me what you want to build — I'll help you decompose it into subsystems, pick components, and design the parts. When you're ready, I'll trigger a full blueprint. What's your project idea?" }
   ]);
   const [input, setInput] = useState('');
   const [isThinking, setIsThinking] = useState(false);
@@ -1158,7 +1183,6 @@ function ConsultantInterface({
   const sendMessage = async () => {
     if (!input.trim()) return;
     const userMsg = input;
-    // Keep internal history compatible with Gemini
     const newMessages = [...messages, { role: 'user' as const, content: userMsg }];
     setMessages(newMessages);
     setInput('');
@@ -1170,7 +1194,7 @@ function ConsultantInterface({
       
       setMessages(prev => [...prev, { role: 'assistant', content: advisorText }]);
 
-      // Handle tool calls if any
+      // Handle tool calls
       if (result.calls && result.calls.length > 0) {
         for (const call of result.calls) {
            if (call.name === 'save_material_preset') {
@@ -1183,11 +1207,13 @@ function ConsultantInterface({
                mode: (args.mode as any) || 'M4',
                quality: 10
              });
+           } else if (call.name === 'generate_blueprint') {
+             const args = call.args as any;
+             onBuildBlueprint(args.projectDescription);
            }
         }
       }
 
-      // Automatically speak the response if not muted
       if (!isMuted) {
         await speakText(advisorText);
       }
@@ -1198,90 +1224,104 @@ function ConsultantInterface({
     }
   };
 
+  const handleManualBuild = () => {
+    // Extract latest context from conversation
+    const context = messages.map(m => `${m.role}: ${m.content}`).join('\n');
+    const lastAssistant = messages.filter(m => m.role === 'assistant').pop()?.content || '';
+    onBuildBlueprint(lastAssistant.length > 50 ? lastAssistant : context.slice(-2000));
+  };
+
   return (
-    <div className="flex flex-col h-full glass-panel border-white/10 overflow-hidden">
-      <div className="bg-black/20 px-4 py-2 border-b border-white/10 flex justify-between items-center">
+    <div className="flex flex-col h-full glass-panel border-white/10 overflow-hidden rounded-2xl shadow-2xl shadow-cyan-500/10">
+      <div className="bg-black/40 px-4 py-2 border-b border-white/10 flex justify-between items-center">
         <div className="flex items-center gap-2">
             <MessageSquare className="w-3.5 h-3.5 text-laser-accent" />
-            <span className="text-[10px] font-bold uppercase tracking-widest text-white/70">Expert Session</span>
+            <span className="text-[10px] font-bold uppercase tracking-widest text-white/70">Design Advisor</span>
         </div>
-        <div className="flex items-center gap-2">
-            <span className="text-[9px] uppercase font-bold text-white/40">{isMuted ? 'Muted' : 'Voice'}</span>
+        <div className="flex items-center gap-1.5">
             <Button 
                 variant="ghost" 
                 size="icon" 
-                className={`h-8 w-8 rounded-full ${isMuted ? 'text-red-400 bg-red-400/10' : 'text-laser-accent bg-laser-accent/10'}`}
+                className={`h-7 w-7 rounded-full ${isMuted ? 'text-red-400 bg-red-400/10' : 'text-laser-accent bg-laser-accent/10'}`}
                 onClick={() => {
                    if (!isMuted) cancelSpeech();
                    onToggleMute();
                 }}
+                title={isMuted ? 'Unmute' : 'Mute'}
             >
-                {isMuted ? <MicOff className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                {isMuted ? <MicOff className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+            </Button>
+            <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 rounded-full text-white/40 hover:text-white"
+                onClick={onCollapse}
+                title="Minimize"
+            >
+                <ChevronRight className="w-4 h-4 rotate-90" />
             </Button>
         </div>
       </div>
-      <ScrollArea className="flex-1 p-4" ref={scrollRef}>
-        <div className="space-y-4">
+      <ScrollArea className="flex-1 p-3" ref={scrollRef}>
+        <div className="space-y-3">
           {messages.map((m, i) => (
             <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[90%] rounded-xl px-4 py-3 text-sm leading-relaxed ${
+              <div className={`max-w-[90%] rounded-xl px-3 py-2 text-xs leading-relaxed ${
                 m.role === 'user' 
                   ? 'bg-laser-accent text-black font-medium rounded-tr-none shadow-md' 
                   : 'bg-white/5 text-white border border-white/10 rounded-tl-none backdrop-blur-sm shadow-sm'
               }`}>
                 {m.content}
-                {m.role === 'assistant' && (
-                  <Button 
-                    variant="ghost" 
-                    size="icon" 
-                    className="h-6 w-6 mt-2 opacity-50 hover:opacity-100 text-laser-accent"
-                    onClick={() => speakText(m.content)}
-                  >
-                    <Volume2 className="w-3 h-3" />
-                  </Button>
-                )}
               </div>
             </div>
           ))}
           {isThinking && (
              <div className="flex justify-start">
-               <div className="bg-white/5 border border-white/10 rounded-2xl rounded-tl-none px-6 py-4 flex gap-1.5">
-                  <div className="w-2 h-2 bg-laser-accent rounded-full animate-bounce" style={{ animationDelay: '0s' }} />
-                  <div className="w-2 h-2 bg-laser-accent rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
-                  <div className="w-2 h-2 bg-laser-accent rounded-full animate-bounce" style={{ animationDelay: '0.4s' }} />
+               <div className="bg-white/5 border border-white/10 rounded-2xl rounded-tl-none px-4 py-3 flex gap-1.5">
+                  <div className="w-1.5 h-1.5 bg-laser-accent rounded-full animate-bounce" style={{ animationDelay: '0s' }} />
+                  <div className="w-1.5 h-1.5 bg-laser-accent rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
+                  <div className="w-1.5 h-1.5 bg-laser-accent rounded-full animate-bounce" style={{ animationDelay: '0.4s' }} />
                </div>
              </div>
           )}
         </div>
       </ScrollArea>
-      <div className="p-3 border-t border-white/10 bg-black/20 flex flex-col gap-2">
+      <div className="p-2.5 border-t border-white/10 bg-black/30 flex flex-col gap-2">
         <div className="flex items-center justify-between px-1">
             <div className="flex items-center gap-2">
                 <div className={`w-1.5 h-1.5 rounded-full ${useDeepThinking ? 'bg-laser-accent animate-pulse shadow-[0_0_8px_#00f2ff]' : 'bg-white/20'}`} />
-                <Label className="text-[9px] font-bold uppercase tracking-widest text-white/40">Expert Thinking</Label>
+                <Label className="text-[9px] font-bold uppercase tracking-widest text-white/40">Deep Think</Label>
             </div>
             <div 
-                className={`w-9 h-4.5 rounded-full transition-colors cursor-pointer flex items-center p-0.5 ${useDeepThinking ? 'bg-laser-accent' : 'bg-white/10'}`}
+                className={`w-8 h-4 rounded-full transition-colors cursor-pointer flex items-center p-0.5 ${useDeepThinking ? 'bg-laser-accent' : 'bg-white/10'}`}
                 onClick={() => setUseDeepThinking(!useDeepThinking)}
             >
                 <motion.div 
-                animate={{ x: useDeepThinking ? 18 : 0 }} 
+                animate={{ x: useDeepThinking ? 16 : 0 }} 
                 className={`w-3 h-3 rounded-full shadow-sm ${useDeepThinking ? 'bg-black' : 'bg-white'}`} 
                 />
             </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-1.5">
             <Input 
-            placeholder="Ask about materials..." 
-            className="glass-input h-10 shadow-inner border-white/10 text-xs"
+            placeholder="Describe your project idea..." 
+            className="glass-input h-9 shadow-inner border-white/10 text-[11px]"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
             />
-            <Button className="accent-btn h-10 px-4 shrink-0 shadow-lg shadow-cyan-500/20 text-xs" onClick={sendMessage}>
-            <Search className="w-3.5 h-3.5 mr-2" /> Advisor
+            <Button className="accent-btn h-9 px-3 shrink-0 shadow-lg shadow-cyan-500/20 text-[10px]" onClick={sendMessage}>
+            <Zap className="w-3 h-3" />
             </Button>
         </div>
+        <Button 
+          variant="outline" 
+          className="w-full h-8 text-[10px] uppercase tracking-widest font-bold bg-gradient-to-r from-blue-600/20 to-purple-600/20 border-blue-500/30 text-blue-300 hover:from-blue-600/30 hover:to-purple-600/30 hover:text-blue-200"
+          onClick={handleManualBuild}
+          disabled={messages.length < 2}
+        >
+          <Wrench className="w-3 h-3 mr-1.5" /> Build Blueprint from Discussion
+        </Button>
       </div>
     </div>
   );
