@@ -1,6 +1,7 @@
 import { GoogleGenAI, ThinkingLevel, Type, FunctionDeclaration } from "@google/genai";
 import { getComponentDatabaseSummary, getTemplateSummary, DESIGN_PRACTICES, COMMUNITY_SOURCES } from '../designDatabase';
 import { getStyleDirective, get3DStyleDirective, getSketchStyleDirective, type DesignStyle } from '../styleGuides';
+import { getRegistrySummary, getDfmSummary } from '../engineeringRegistry';
 
 const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
 
@@ -156,6 +157,10 @@ ${DESIGN_PRACTICES}
 COMMUNITY SOURCES:
 ${COMMUNITY_SOURCES.map(s => `- ${s.platform}: ${s.categories.join(', ')}`).join('\n')}
 
+${getRegistrySummary()}
+
+${getDfmSummary()}
+
 RULES:
 1. Be brief but information-dense. Use bullet points and specs.
 2. ALWAYS end your response with a clear next-step suggestion (unless confirming a tool call).
@@ -167,9 +172,18 @@ RULES:
 8. Proactively suggest novel strategies from the list above when they fit the user's project.
 9. When the user seems stuck, suggest using the Sketch panel to visualize ideas before engineering them.`;
 
-export async function consultLaserExpert(query: string, history: any[] = [], useThinking: boolean = false) {
+export async function consultLaserExpert(query: string, history: any[] = [], useThinking: boolean = false, imageBase64?: string) {
   const modelName = useThinking ? "gemini-3.1-pro-preview" : "gemini-3-flash-preview";
   
+  // Build user parts with optional image
+  const userParts: any[] = [];
+  if (imageBase64) {
+    const raw = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
+    userParts.push({ inlineData: { data: raw, mimeType: 'image/png' } });
+    userParts.push({ text: 'The user attached this image. Analyze it in context of their message:\n\n' });
+  }
+  userParts.push({ text: query });
+
   const response = await withRetry(() => ai.models.generateContent({
     model: modelName,
     contents: [
@@ -177,7 +191,7 @@ export async function consultLaserExpert(query: string, history: any[] = [], use
         role: msg.role === 'assistant' ? 'model' : 'user',
         parts: [{ text: msg.content }]
       })),
-      { role: 'user', parts: [{ text: query }] }
+      { role: 'user', parts: userParts }
     ],
     config: {
       systemInstruction: ADVISOR_SYSTEM_INSTRUCTION,
@@ -350,6 +364,10 @@ ${DESIGN_PRACTICES}
 DESIGN TEMPLATES REFERENCE:
 ${templateDb}
 
+${getRegistrySummary()}
+
+${getDfmSummary()}
+
 When generating a blueprint:
 1. DECOMPOSE the project into clear subsystems
 2. For each 3D printed part, generate working OpenSCAD code that produces the actual geometry
@@ -370,6 +388,29 @@ CRITICAL 3D DESIGN RULES:
 - Keep all parts within a realistic scale (most hobby projects: 20-300mm per axis)
 - Always define origin consistently: front-left-bottom corner or center-bottom
 - Every primitive MUST have explicit numeric dimensions, never hardcode 1 or 0.5 as placeholder
+
+CRITICAL: GENERATE REAL 3D GEOMETRY WITH CSG OPERATIONS
+Your OpenSCAD code must produce parts that actually LOOK like the real object, not just basic primitive shapes.
+Use these techniques to create realistic geometry:
+- difference() to cut holes, pockets, channels, and negative features from solid bodies
+- union() to join multiple shapes into complex forms
+- intersection() for creating shapes by overlapping
+- hull() to create smooth organic transitions between primitives
+- linear_extrude(height=H) with polygon() for 2D profile extrusion (ideal for complex profiles)
+- rotate_extrude() for axially symmetric parts (knobs, wheels, pulleys)
+- minkowski() for adding fillets/chamfers (use small sphere for rounding)
+- for() loops for repeated features (mounting holes, fins, slots, patterns)
+- Use the Engineering Parts Registry above — include the exact OpenSCAD modules for standard parts (NEMA17, 608 bearings, M3 bolts, etc.)
+
+Examples of GOOD vs BAD:
+BAD: A motor is just cylinder(d=42, h=40) — this is an anonymous cylinder
+GOOD: A motor has a body (cube), boss (cylinder on top), shaft (thin cylinder extending out), mounting holes (difference with 4 cylinders at mount_spacing), wire channel (small cube cutout on back)
+BAD: A bracket is just cube([20,20,2]) — this is just a flat rectangle
+GOOD: A bracket has an L-shape (union of two cubes), mounting holes (difference with cylinders), rounded corners (minkowski with small sphere), and slots for adjustment
+BAD: An enclosure is cube([100,60,40])
+GOOD: An enclosure is difference() { cube([100,60,40]); translate([2,2,2]) cube([96,56,38]); } with mounting bosses, ventilation slots, LCD cutout, button holes, cable grommet holes
+
+ALWAYS include an assembly() module that shows how ALL parts fit together with translate/rotate positioning.
 `;
 
   const contextSection = advisorContext 
@@ -425,7 +466,7 @@ Return exactly as JSON.`;
               required: ["name", "source", "price", "speed", "category"]
             }
           },
-          openscadCode: { type: Type.STRING, description: "Complete OpenSCAD code for ALL 3D-printable custom parts. ALL DIMENSIONS IN MILLIMETERS. Define shared variables at top (e.g. wall_t=2.5, screw_d=3, pcb_width=50). Each part as a named module. Use translate(), rotate(), cube([w,d,h]), cylinder(r=R, h=H), sphere(r=R) with NAMED parameters. Mating parts MUST share interface dimensions — mounting holes, slot widths, and surface sizes must match between parts that connect. Use difference() for holes/cutouts. Include intersection/clearance checks: holes for M3 screws = 3.3mm diameter, press-fit pins = diameter-0.2mm. Include an assembly() module that places all parts using translate() at their real positions. Every module MUST contain at least one primitive with real mm dimensions (no placeholders). Typical scale: individual parts 10-200mm per axis. Use color() to differentiate parts visually." },
+          openscadCode: { type: Type.STRING, description: "Complete OpenSCAD code for ALL 3D-printable custom parts. ALL DIMENSIONS IN MILLIMETERS. Define shared variables at top. Each part as a named module. MANDATORY: Use difference() to cut holes/pockets/channels, union() to combine shapes, hull() for smooth transitions. Parts must look like REAL objects, not basic primitives. A motor mount must have screw holes, a housing must be hollow with wall thickness, brackets must be L-shaped with mounting holes. Use for() loops for repeated features (bolt patterns, ventilation slots). Include rotate_extrude() for round parts, linear_extrude() with polygon() for complex profiles. Use the Engineering Parts Registry modules (NEMA17(), 608_bearing(), M3x10_bolt(), etc.) for standard components. Include an assembly() module placing all parts at real positions. Every module MUST contain geometry with actual mm dimensions." },
           svgDesign: { type: Type.STRING, description: "Generate MULTIPLE SVG drawings separated by <!--PART_BREAK--> comments. Each part SVG should be a complete <svg> element with viewBox, containing the 2D profile/cutline for ONE part. Include a <title> element with the part name. Use <rect>, <circle>, <path>, <line> elements with real dimensions in mm. Use stroke='red' for cut lines, stroke='blue' for engrave lines. Example: <svg viewBox='0 0 100 50'><title>Base Plate</title>...</svg><!--PART_BREAK--><svg viewBox='0 0 60 60'><title>Side Panel</title>...</svg>" },
           wiringDiagram: { type: Type.STRING, description: "Generate a Mermaid flowchart diagram showing ALL wiring connections. Use 'graph LR' or 'graph TD'. Each component is a node, each wire is an edge with the pin names as labels. Example: graph LR; Arduino[Arduino Uno] -->|D9 PWM| MotorDriver[L298N]; MotorDriver -->|OUT1/OUT2| Motor[Nema 17]; PSU[12V PSU] -->|VIN| MotorDriver; PSU -->|5V reg| Arduino; Also include a text summary after the mermaid block preceded by '---TEXT---' showing pin-by-pin connections." },
           assemblySteps: {

@@ -16,9 +16,35 @@ export function cancelSpeech() {
   }
 }
 
-export async function speakText(text: string, voice: 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr' = 'Kore') {
-  cancelSpeech(); // Stop existing speech
+function getAudioContext(): AudioContext {
+  if (!currentAudioContext) {
+    currentAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+  }
+  return currentAudioContext;
+}
 
+function decodeRawAudio(base64Audio: string): AudioBuffer {
+  const audioContent = atob(base64Audio);
+  const buffer = new ArrayBuffer(audioContent.length);
+  const view = new Uint8Array(buffer);
+  for (let i = 0; i < audioContent.length; i++) {
+    view[i] = audioContent.charCodeAt(i);
+  }
+  const ctx = getAudioContext();
+  const audioBuffer = ctx.createBuffer(1, view.length / 2, 24000);
+  const channelData = audioBuffer.getChannelData(0);
+  const int16View = new Int16Array(buffer);
+  for (let i = 0; i < int16View.length; i++) {
+    channelData[i] = int16View[i] / 32768;
+  }
+  return audioBuffer;
+}
+
+/** Generate TTS audio and return the raw AudioBuffer without playing it */
+export async function generateAudioBuffer(
+  text: string,
+  voice: 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr' = 'Kore'
+): Promise<AudioBuffer | null> {
   const response = await ai.models.generateContent({
     model: "gemini-3.1-flash-tts-preview",
     contents: [{ parts: [{ text: `Say clearly: ${text}` }] }],
@@ -31,33 +57,25 @@ export async function speakText(text: string, voice: 'Puck' | 'Charon' | 'Kore' 
       },
     },
   });
-
   const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-  if (base64Audio) {
-    const audioContent = atob(base64Audio);
-    const buffer = new ArrayBuffer(audioContent.length);
-    const view = new Uint8Array(buffer);
-    for (let i = 0; i < audioContent.length; i++) {
-        view[i] = audioContent.charCodeAt(i);
-    }
-    
-    if (!currentAudioContext) {
-        currentAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-    }
-    
-    const audioBuffer = currentAudioContext.createBuffer(1, view.length / 2, 24000);
-    const channelData = audioBuffer.getChannelData(0);
-    
-    // Convert Int16 to Float32
-    const int16View = new Int16Array(buffer);
-    for (let i = 0; i < int16View.length; i++) {
-        channelData[i] = int16View[i] / 32768;
-    }
-    
-    const source = currentAudioContext.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(currentAudioContext.destination);
-    source.start();
-    currentAudioSource = source;
-  }
+  if (!base64Audio) return null;
+  return decodeRawAudio(base64Audio);
+}
+
+/** Play an AudioBuffer. Returns the source node for stopping. */
+export function playBuffer(buf: AudioBuffer): AudioBufferSourceNode {
+  cancelSpeech();
+  const ctx = getAudioContext();
+  const source = ctx.createBufferSource();
+  source.buffer = buf;
+  source.connect(ctx.destination);
+  source.start();
+  currentAudioSource = source;
+  return source;
+}
+
+/** Legacy: generate + immediately play (used when not per-message) */
+export async function speakText(text: string, voice: 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr' = 'Kore') {
+  const buf = await generateAudioBuffer(text, voice);
+  if (buf) playBuffer(buf);
 }

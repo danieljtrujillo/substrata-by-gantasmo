@@ -74,7 +74,11 @@ import {
   Archive,
   Smartphone,
   Info,
-  ChevronDown
+  ChevronDown,
+  Play,
+  Pause,
+  Paperclip,
+  Camera
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { onAuthStateChanged, CloudflareUser } from './lib/auth';
@@ -123,7 +127,7 @@ import {
   generateParametricVariant,
   type SketchMode
 } from './services/geminiService';
-import { speakText, cancelSpeech } from './services/ttsService';
+import { speakText, cancelSpeech, generateAudioBuffer, playBuffer } from './services/ttsService';
 import { ACMER_S1_PARAMETERS, ACMER_S1_MANUAL_SUMMARY, PROJECT_TEMPLATES, LaserSettings, LabelSettings, LABEL_SIZE_PRESETS, MUNBYN_ITPP130B, PRINTER_DATABASE, LASER_DATABASE } from './constants';
 import { STYLE_GUIDES } from './styleGuides';
 import { loginWithGoogle, logout, AUTH_AVAILABLE } from './lib/auth';
@@ -283,15 +287,56 @@ function extractPrimitives(body: string, moduleName: string, color: string, out:
     white: '#f8fafc', gray: '#6b7280', black: '#1e293b', silver: '#94a3b8'
   };
 
+  // Track CSG context: if inside difference(), first child is additive, rest are subtractive (marked as hidden)
+  // We parse them all as regular primitives but tag subtractive ones with a dim color and transparency
+  let csgMode: 'none' | 'difference' | 'union' | 'intersection' = 'none';
+  let csgChildIndex = 0;
+  let braceDepth = 0;
+
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('//')) continue;
+
+    // Detect CSG block starts
+    if (/^difference\s*\(\s*\)\s*\{/.test(trimmed)) {
+      csgMode = 'difference';
+      csgChildIndex = 0;
+      braceDepth = 1;
+      continue;
+    }
+    if (/^union\s*\(\s*\)\s*\{/.test(trimmed)) {
+      csgMode = 'union';
+      csgChildIndex = 0;
+      braceDepth = 1;
+      continue;
+    }
+    if (/^intersection\s*\(\s*\)\s*\{/.test(trimmed)) {
+      csgMode = 'intersection';
+      csgChildIndex = 0;
+      braceDepth = 1;
+      continue;
+    }
+
+    // Track braces inside CSG blocks
+    if (csgMode !== 'none') {
+      for (const ch of trimmed) {
+        if (ch === '{') braceDepth++;
+        if (ch === '}') braceDepth--;
+      }
+      if (braceDepth <= 0) {
+        csgMode = 'none';
+        csgChildIndex = 0;
+        continue;
+      }
+    }
 
     // Parse color
     const colorMatch = trimmed.match(/color\(\s*"(\w+)"\s*\)/) || trimmed.match(/color\(\s*\[([\d.,\s]+)\]\s*\)/);
     if (colorMatch) {
       if (colorMatch[1] && namedColors[colorMatch[1].toLowerCase()]) {
         currentColor = namedColors[colorMatch[1].toLowerCase()];
+      } else if (colorMatch[1] && colorMatch[1].startsWith('#')) {
+        currentColor = colorMatch[1];
       }
     }
 
@@ -309,7 +354,11 @@ function extractPrimitives(body: string, moduleName: string, color: string, out:
       currentRotation = [vals[0] || 0, vals[2] || 0, vals[1] || 0];
     }
 
-    // Parse cube — RAW dimensions, no per-primitive scaling
+    // Determine if this primitive is a CSG subtraction (should be rendered as dark/transparent "hole")
+    const isSubtractive = csgMode === 'difference' && csgChildIndex > 0;
+    const primColor = isSubtractive ? '#ff2222' : currentColor;
+
+    // Parse cube — RAW dimensions
     const cubeMatch = trimmed.match(/cube\(\[([^\]]+)\]/) || trimmed.match(/cube\((\d[\d.]*)\)/);
     if (cubeMatch) {
       let dims: number[];
@@ -325,9 +374,10 @@ function extractPrimitives(body: string, moduleName: string, color: string, out:
         args: [dims[0] || 1, dims[2] || dims[0] || 1, dims[1] || dims[0] || 1],
         position: [...currentTranslate],
         rotation: [...currentRotation],
-        color: currentColor,
-        label: moduleName
+        color: primColor,
+        label: isSubtractive ? `${moduleName}_hole` : moduleName
       });
+      if (csgMode !== 'none') csgChildIndex++;
       currentTranslate = [0, 0, 0];
       currentRotation = [0, 0, 0];
       currentColor = color;
@@ -368,9 +418,10 @@ function extractPrimitives(body: string, moduleName: string, color: string, out:
         args: [r, r2, h, segments],
         position: [...currentTranslate],
         rotation: [...currentRotation],
-        color: currentColor,
-        label: moduleName
+        color: primColor,
+        label: isSubtractive ? `${moduleName}_hole` : moduleName
       });
+      if (csgMode !== 'none') csgChildIndex++;
       currentTranslate = [0, 0, 0];
       currentRotation = [0, 0, 0];
       currentColor = color;
@@ -396,9 +447,10 @@ function extractPrimitives(body: string, moduleName: string, color: string, out:
         args: [r, segs, segs],
         position: [...currentTranslate],
         rotation: [...currentRotation],
-        color: currentColor,
-        label: moduleName
+        color: primColor,
+        label: isSubtractive ? `${moduleName}_hole` : moduleName
       });
+      if (csgMode !== 'none') csgChildIndex++;
       currentTranslate = [0, 0, 0];
       currentRotation = [0, 0, 0];
       currentColor = color;
@@ -487,7 +539,7 @@ function WiringMermaid({ code }: { code: string }) {
   return <div ref={containerRef} className="wiring-mermaid-container flex justify-center [&_svg]:max-w-full" dangerouslySetInnerHTML={{ __html: svgHtml }} />;
 }
 
-const PrototypePreview = ({ openscadCode, parts }: { openscadCode: string; parts: Part[] }) => {
+const PrototypePreview = ({ openscadCode, parts, selectedPartLabel, onPartClick }: { openscadCode: string; parts: Part[]; selectedPartLabel?: string | null; onPartClick?: (label: string) => void }) => {
   const primitives = useMemo(() => {
     const parsed = parseOpenSCAD(openscadCode);
     if (parsed.length > 0) return parsed;
@@ -523,6 +575,14 @@ const PrototypePreview = ({ openscadCode, parts }: { openscadCode: string; parts
   const [hovered, setHovered] = useState<number | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
 
+  // Sync external selectedPartLabel with internal selected state
+  useEffect(() => {
+    if (selectedPartLabel) {
+      const idx = primitives.findIndex(p => p.label === selectedPartLabel || p.label.includes(selectedPartLabel));
+      if (idx >= 0) setSelected(idx);
+    }
+  }, [selectedPartLabel, primitives]);
+
   return (
     <group>
       {primitives.map((prim, i) => {
@@ -530,40 +590,59 @@ const PrototypePreview = ({ openscadCode, parts }: { openscadCode: string; parts
         const isSel = selected === i;
         const isActive = isHov || isSel;
         const dimmed = selected !== null && !isSel && !isHov;
+        const isHole = prim.label.endsWith('_hole');
         return (
           <group key={i} position={prim.position} rotation={prim.rotation}>
             <mesh
-              castShadow
-              receiveShadow
+              castShadow={!isHole}
+              receiveShadow={!isHole}
               onPointerOver={(e) => { e.stopPropagation(); setHovered(i); document.body.style.cursor = 'pointer'; }}
               onPointerOut={() => { setHovered(null); document.body.style.cursor = 'auto'; }}
-              onClick={(e) => { e.stopPropagation(); setSelected(isSel ? null : i); }}
+              onClick={(e) => { 
+                e.stopPropagation(); 
+                setSelected(isSel ? null : i);
+                if (onPartClick && !isSel) onPartClick(prim.label);
+              }}
               scale={isActive ? 1.05 : 1}
             >
               {prim.type === 'cube' && <boxGeometry args={prim.args as [number, number, number]} />}
               {prim.type === 'cylinder' && <cylinderGeometry args={prim.args as [number, number, number, number]} />}
               {prim.type === 'sphere' && <sphereGeometry args={prim.args as [number, number, number]} />}
-              <meshPhysicalMaterial
-                color={prim.color}
-                metalness={isActive ? 0.6 : 0.4}
-                roughness={isActive ? 0.2 : 0.35}
-                clearcoat={0.5}
-                clearcoatRoughness={0.15}
-                emissive={isActive ? prim.color : '#000000'}
-                emissiveIntensity={isHov ? 0.35 : isSel ? 0.5 : 0}
-                transparent
-                opacity={dimmed ? 0.3 : isActive ? 1 : 0.88}
-              />
+              {isHole ? (
+                <meshPhysicalMaterial
+                  color="#ff2222"
+                  metalness={0.1}
+                  roughness={0.8}
+                  transparent
+                  opacity={0.15}
+                  side={THREE.DoubleSide}
+                  depthWrite={false}
+                />
+              ) : (
+                <meshPhysicalMaterial
+                  color={prim.color}
+                  metalness={isActive ? 0.6 : 0.4}
+                  roughness={isActive ? 0.2 : 0.35}
+                  clearcoat={0.5}
+                  clearcoatRoughness={0.15}
+                  emissive={isActive ? prim.color : '#000000'}
+                  emissiveIntensity={isHov ? 0.35 : isSel ? 0.5 : 0}
+                  transparent
+                  opacity={dimmed ? 0.3 : isActive ? 1 : 0.88}
+                />
+              )}
             </mesh>
             {/* Edge wireframe */}
-            <mesh>
-              {prim.type === 'cube' && <boxGeometry args={prim.args as [number, number, number]} />}
-              {prim.type === 'cylinder' && <cylinderGeometry args={prim.args as [number, number, number, number]} />}
-              {prim.type === 'sphere' && <sphereGeometry args={prim.args as [number, number, number]} />}
-              <meshBasicMaterial color={isActive ? '#ffffff' : prim.color} wireframe opacity={isActive ? 0.3 : 0.1} transparent />
-            </mesh>
+            {!isHole && (
+              <mesh>
+                {prim.type === 'cube' && <boxGeometry args={prim.args as [number, number, number]} />}
+                {prim.type === 'cylinder' && <cylinderGeometry args={prim.args as [number, number, number, number]} />}
+                {prim.type === 'sphere' && <sphereGeometry args={prim.args as [number, number, number]} />}
+                <meshBasicMaterial color={isActive ? '#ffffff' : prim.color} wireframe opacity={isActive ? 0.3 : 0.1} transparent />
+              </mesh>
+            )}
             {/* Selection ring glow */}
-            {isSel && prim.type !== 'sphere' && (
+            {isSel && prim.type !== 'sphere' && !isHole && (
               <mesh scale={1.08}>
                 {prim.type === 'cube' && <boxGeometry args={prim.args as [number, number, number]} />}
                 {prim.type === 'cylinder' && <cylinderGeometry args={prim.args as [number, number, number, number]} />}
@@ -571,7 +650,7 @@ const PrototypePreview = ({ openscadCode, parts }: { openscadCode: string; parts
               </mesh>
             )}
             {/* Floating label on hover/select */}
-            {isActive && (
+            {isActive && !isHole && (
               <Html distanceFactor={8} position={[0, Math.max(...(prim.args.slice(0, 3).map(a => a / 2))) + 0.3, 0]} center
                 style={{ pointerEvents: 'none', userSelect: 'none' }}>
                 <div className="px-2 py-1 rounded bg-black/90 border border-white/20 backdrop-blur-md whitespace-nowrap"
@@ -658,6 +737,7 @@ export default function App() {
   const [activeOutputTab, setActiveOutputTab] = useState('3d');
   const [activeDesignFileTab, setActiveDesignFileTab] = useState<'openscad' | 'svg' | 'wiring'>('openscad');
   const [designFileViewMode, setDesignFileViewMode] = useState<'preview' | 'code'>('preview');
+  const [selectedPartLabel, setSelectedPartLabel] = useState<string | null>(null);
   const [selectedPrinter, setSelectedPrinter] = useState('Saturn 3 Ultra');
   const [selectedLaser, setSelectedLaser] = useState('ACMER S1');
   const [bomSortMode, setBomSortMode] = useState<'fastest' | 'cheapest' | 'none'>('none');
@@ -2435,7 +2515,7 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
                   <OrbitControls makeDefault minPolarAngle={0} maxPolarAngle={Math.PI / 1.75} />
                   <Suspense fallback={null}>
                     <Stage environment="city" intensity={0.5}>
-                      <PrototypePreview openscadCode={protoProject?.openscadCode || ''} parts={protoProject?.parts || []} />
+                      <PrototypePreview openscadCode={protoProject?.openscadCode || ''} parts={protoProject?.parts || []} selectedPartLabel={selectedPartLabel} onPartClick={(label) => setSelectedPartLabel(label)} />
                     </Stage>
                     <Environment preset="city" />
                   </Suspense>
@@ -2507,9 +2587,8 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
                 )}
               </div>
             </div>
-          </div>
 
-          {/* Label/Sticker Designer viewport */}
+            {/* Label/Sticker Designer viewport */}
           <div className={`absolute inset-0 ${engineeringMode === 'label' ? '' : 'hidden'}`}>
             <div className="h-full flex flex-col">
               {/* Label canvas area */}
@@ -2596,6 +2675,7 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
                 </div>
               </div>
             </div>
+          </div>
           </div>
 
           {/* ─── BOTTOM: Output Tabs (progressive reveal) ─── */}
@@ -2740,11 +2820,51 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
                   </div>
 
                   {designFileViewMode === 'code' ? (
-                    <pre className="flex-1 p-3 text-xs font-mono overflow-auto whitespace-pre-wrap" style={{ color: activeDesignFileTab === 'openscad' ? '#93c5fd' : activeDesignFileTab === 'svg' ? '#86efac' : '#fde68a' }}>
-                      {activeDesignFileTab === 'openscad' && (protoProject?.openscadCode || '// Generate a blueprint to see OpenSCAD code')}
-                      {activeDesignFileTab === 'svg' && (protoProject?.svgDesign || '<!-- Generate a blueprint to see SVG paths -->')}
-                      {activeDesignFileTab === 'wiring' && (protoProject?.wiringDiagram || '# Generate a blueprint to see wiring diagram')}
-                    </pre>
+                    <div className="flex-1 overflow-auto">
+                      {activeDesignFileTab === 'openscad' && (() => {
+                        const code = protoProject?.openscadCode || '// Generate a blueprint to see OpenSCAD code';
+                        // Split code into module blocks for click-to-select
+                        const moduleRegex = /module\s+(\w+)\s*\([^)]*\)\s*\{/g;
+                        const segments: { text: string; label: string | null }[] = [];
+                        let lastIdx = 0;
+                        let match;
+                        while ((match = moduleRegex.exec(code)) !== null) {
+                          if (match.index > lastIdx) {
+                            segments.push({ text: code.slice(lastIdx, match.index), label: null });
+                          }
+                          let depth = 1, pos = match.index + match[0].length;
+                          while (pos < code.length && depth > 0) {
+                            if (code[pos] === '{') depth++;
+                            else if (code[pos] === '}') depth--;
+                            pos++;
+                          }
+                          segments.push({ text: code.slice(match.index, pos), label: match[1] });
+                          lastIdx = pos;
+                        }
+                        if (lastIdx < code.length) segments.push({ text: code.slice(lastIdx), label: null });
+
+                        return (
+                          <pre className="p-3 text-xs font-mono whitespace-pre-wrap" style={{ color: '#93c5fd' }}>
+                            {segments.map((seg, idx) => seg.label ? (
+                              <span key={idx}
+                                className={`cursor-pointer rounded transition-colors ${selectedPartLabel === seg.label ? 'bg-blue-500/30 ring-1 ring-blue-400/50' : 'hover:bg-white/5'}`}
+                                onClick={() => { setSelectedPartLabel(selectedPartLabel === seg.label ? null : seg.label); setEngineeringMode('prototype'); }}
+                              >{seg.text}</span>
+                            ) : <span key={idx}>{seg.text}</span>)}
+                          </pre>
+                        );
+                      })()}
+                      {activeDesignFileTab === 'svg' && (
+                        <pre className="p-3 text-xs font-mono overflow-auto whitespace-pre-wrap" style={{ color: '#86efac' }}>
+                          {protoProject?.svgDesign || '<!-- Generate a blueprint to see SVG paths -->'}
+                        </pre>
+                      )}
+                      {activeDesignFileTab === 'wiring' && (
+                        <pre className="p-3 text-xs font-mono overflow-auto whitespace-pre-wrap" style={{ color: '#fde68a' }}>
+                          {protoProject?.wiringDiagram || '# Generate a blueprint to see wiring diagram'}
+                        </pre>
+                      )}
+                    </div>
                   ) : (
                     <div className="flex-1 overflow-auto p-3">
                       {activeDesignFileTab === 'svg' && (
@@ -3242,17 +3362,32 @@ function ConsultantInterface({
   onBuildBlueprint: (description: string) => void,
   protoProject: PrototypeProject | null,
 }) {
-  const [messages, setMessages] = useState<{ role: 'user' | 'assistant', content: string, files?: { name: string, content: string, ext: string }[] }[]>([
+  const [messages, setMessages] = useState<{ role: 'user' | 'assistant', content: string, files?: { name: string, content: string, ext: string }[], image?: string, audioBuffer?: AudioBuffer | null, isPlaying?: boolean }[]>([
     { role: 'assistant', content: "SUBSTRATA Design Advisor online. Tell me what you want to build — I'll help you decompose it into subsystems, pick components, and design the parts. When you're ready, I'll trigger a full blueprint. What's your project idea?" }
   ]);
   const [input, setInput] = useState('');
   const [isThinking, setIsThinking] = useState(false);
   const [useDeepThinking, setUseDeepThinking] = useState(false);
+  const [pendingImage, setPendingImage] = useState<string | null>(null);
+  const [isRecordingVoice, setIsRecordingVoice] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isThinking]);
+
+  // Auto-resize textarea
+  const autoResize = () => {
+    const el = textareaRef.current;
+    if (el) {
+      el.style.height = 'auto';
+      el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+    }
+  };
 
   // When a new blueprint is generated, add a message with downloadable files
   const prevProjectRef = useRef<string | null>(null);
@@ -3282,19 +3417,102 @@ function ConsultantInterface({
     }
   }, [protoProject]);
 
+  // Image upload handler
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setPendingImage(reader.result as string);
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  // Voice recording
+  const startVoiceRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      audioChunksRef.current = [];
+      mr.ondataavailable = (ev) => { if (ev.data.size > 0) audioChunksRef.current.push(ev.data); };
+      mr.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        try {
+          // Convert to base64 for transcription
+          const buf = await blob.arrayBuffer();
+          const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+          const transcribed = await transcribeSpokenPrompt(b64);
+          if (transcribed) setInput(prev => (prev ? prev + ' ' : '') + transcribed);
+          toast.success('Voice transcribed!');
+        } catch {
+          toast.error('Voice transcription failed');
+        }
+      };
+      mr.start();
+      mediaRecorderRef.current = mr;
+      setIsRecordingVoice(true);
+    } catch {
+      toast.error('Microphone access denied');
+    }
+  };
+
+  const stopVoiceRecording = () => {
+    mediaRecorderRef.current?.stop();
+    mediaRecorderRef.current = null;
+    setIsRecordingVoice(false);
+  };
+
+  // Per-message TTS toggle
+  const toggleMessageAudio = async (msgIdx: number) => {
+    const msg = messages[msgIdx];
+    if (!msg || msg.role !== 'assistant') return;
+
+    if (msg.isPlaying) {
+      cancelSpeech();
+      setMessages(prev => prev.map((m, i) => i === msgIdx ? { ...m, isPlaying: false } : m));
+      return;
+    }
+
+    // Stop any currently playing message
+    setMessages(prev => prev.map(m => ({ ...m, isPlaying: false })));
+    cancelSpeech();
+
+    // Generate audio if not cached
+    let buf = msg.audioBuffer;
+    if (!buf) {
+      try {
+        buf = await generateAudioBuffer(msg.content);
+        setMessages(prev => prev.map((m, i) => i === msgIdx ? { ...m, audioBuffer: buf } : m));
+      } catch {
+        toast.error('TTS generation failed');
+        return;
+      }
+    }
+    if (!buf) return;
+
+    const source = playBuffer(buf);
+    setMessages(prev => prev.map((m, i) => i === msgIdx ? { ...m, isPlaying: true } : m));
+    source.onended = () => {
+      setMessages(prev => prev.map((m, i) => i === msgIdx ? { ...m, isPlaying: false } : m));
+    };
+  };
+
   const sendMessage = async () => {
-    if (!input.trim()) return;
+    if (!input.trim() && !pendingImage) return;
     const userMsg = input;
-    const newMessages = [...messages, { role: 'user' as const, content: userMsg }];
+    const userImage = pendingImage;
+    const newMessages = [...messages, { role: 'user' as const, content: userMsg, image: userImage || undefined }];
     setMessages(newMessages);
     setInput('');
+    setPendingImage(null);
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
     setIsThinking(true);
 
     try {
-      const result = await consultLaserExpert(userMsg, messages, useDeepThinking);
+      const result = await consultLaserExpert(userMsg, messages, useDeepThinking, userImage || undefined);
       const advisorText = result.text;
       
-      setMessages(prev => [...prev, { role: 'assistant', content: advisorText }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: advisorText, audioBuffer: null, isPlaying: false }]);
 
       // Handle tool calls
       if (result.calls && result.calls.length > 0) {
@@ -3316,9 +3534,7 @@ function ConsultantInterface({
         }
       }
 
-      if (!isMuted) {
-        await speakText(advisorText);
-      }
+      // No autoplay — user clicks play button per message
     } catch (e) {
       toast.error("Advice consultation failed");
     } finally {
@@ -3327,7 +3543,6 @@ function ConsultantInterface({
   };
 
   const handleManualBuild = () => {
-    // Extract latest context from conversation
     const context = messages.map(m => `${m.role}: ${m.content}`).join('\n');
     const lastAssistant = messages.filter(m => m.role === 'assistant').pop()?.content || '';
     onBuildBlueprint(lastAssistant.length > 50 ? lastAssistant : context.slice(-2000));
@@ -3340,20 +3555,6 @@ function ConsultantInterface({
             <MessageSquare className="w-3.5 h-3.5 text-laser-accent" />
             <span className="text-[10px] font-bold uppercase tracking-widest text-white/70">Design Advisor</span>
         </div>
-        <div className="flex items-center gap-1.5">
-            <Button 
-                variant="ghost" 
-                size="icon" 
-                className={`h-7 w-7 rounded-full ${isMuted ? 'text-red-400 bg-red-400/10' : 'text-laser-accent bg-laser-accent/10'}`}
-                onClick={() => {
-                   if (!isMuted) cancelSpeech();
-                   onToggleMute();
-                }}
-                title={isMuted ? 'Turn the voice back on so the AI talks out loud' : 'Stop the AI from talking out loud'}
-            >
-                {isMuted ? <MicOff className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
-            </Button>
-        </div>
       </div>
       <div className="flex-1 overflow-y-auto p-3 scrollbar-thin scrollbar-thumb-white/10">
         <div className="space-y-3">
@@ -3364,13 +3565,55 @@ function ConsultantInterface({
                   ? 'bg-laser-accent text-black font-medium rounded-tr-none shadow-md' 
                   : 'bg-white/5 text-white border border-white/10 rounded-tl-none backdrop-blur-sm shadow-sm'
               }`}>
-                {m.content}
-                {/* Restart from here button — visible on hover for all messages after initial */}
+                {/* Show attached image if present */}
+                {m.image && (
+                  <img src={m.image} alt="Attached" className="max-w-full max-h-32 rounded-lg mb-2 border border-white/10" />
+                )}
+                {/* Render message content — detect and inline-display code blocks */}
+                {(() => {
+                  const content = m.content;
+                  // Check for OpenSCAD or SVG code blocks in assistant messages
+                  if (m.role === 'assistant') {
+                    const codeBlockRegex = /```(?:openscad|svg|scad)\n([\s\S]*?)```/g;
+                    const parts: (string | { type: 'code'; lang: string; code: string })[] = [];
+                    let lastIdx = 0;
+                    let match;
+                    while ((match = codeBlockRegex.exec(content)) !== null) {
+                      if (match.index > lastIdx) parts.push(content.slice(lastIdx, match.index));
+                      parts.push({ type: 'code', lang: match[0].startsWith('```svg') ? 'svg' : 'openscad', code: match[1] });
+                      lastIdx = match.index + match[0].length;
+                    }
+                    if (lastIdx < content.length) parts.push(content.slice(lastIdx));
+                    if (parts.length > 1 || (parts.length === 1 && typeof parts[0] !== 'string')) {
+                      return parts.map((p, j) => typeof p === 'string' ? <span key={j}>{p}</span> : (
+                        <div key={j} className="my-2 rounded-lg border border-white/10 overflow-hidden">
+                          <div className="bg-white/5 px-2 py-1 text-[8px] uppercase tracking-widest text-white/40 font-bold">{p.lang}</div>
+                          {p.lang === 'svg' ? (
+                            <div className="bg-white rounded-b-lg p-3" dangerouslySetInnerHTML={{ __html: sanitizeSvg(p.code) }} />
+                          ) : (
+                            <pre className="p-2 text-[10px] font-mono text-blue-300 overflow-x-auto max-h-32">{p.code}</pre>
+                          )}
+                        </div>
+                      ));
+                    }
+                  }
+                  return content;
+                })()}
+                {/* TTS play/pause button for assistant messages */}
+                {m.role === 'assistant' && i > 0 && (
+                  <button
+                    onClick={() => toggleMessageAudio(i)}
+                    className="absolute -bottom-2 -right-2 w-6 h-6 rounded-full bg-black/80 border border-white/20 flex items-center justify-center text-white/60 hover:text-laser-accent hover:border-laser-accent transition-colors"
+                    title={m.isPlaying ? 'Pause audio' : 'Play this response'}
+                  >
+                    {m.isPlaying ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
+                  </button>
+                )}
+                {/* Restart from here button */}
                 {i > 0 && (
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      // Truncate messages to this point and allow re-entry
                       setMessages(messages.slice(0, i + 1));
                       if (m.role === 'user') setInput(m.content);
                       toast.info(`Restarted from message ${i + 1}`);
@@ -3437,13 +3680,45 @@ function ConsultantInterface({
                 />
             </div>
         </div>
-        <div className="flex gap-1.5">
-            <Input 
-            placeholder="Describe your project idea..." 
-            className="glass-input h-9 shadow-inner border-white/10 text-[11px]"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
+        {/* Pending image preview */}
+        {pendingImage && (
+          <div className="relative inline-block self-start">
+            <img src={pendingImage} alt="Attached" className="max-h-16 rounded-lg border border-white/10" />
+            <button onClick={() => setPendingImage(null)} className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-500 flex items-center justify-center text-white text-[8px]">
+              <X className="w-2.5 h-2.5" />
+            </button>
+          </div>
+        )}
+        <div className="flex gap-1.5 items-end">
+            {/* Hidden file input */}
+            <input ref={imageInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
+            {/* Image upload button */}
+            <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0 text-white/40 hover:text-white" onClick={() => imageInputRef.current?.click()} title="Attach an image">
+              <Paperclip className="w-3.5 h-3.5" />
+            </Button>
+            {/* Camera capture button */}
+            <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0 text-white/40 hover:text-white" 
+              onClick={() => { const inp = imageInputRef.current; if (inp) { inp.setAttribute('capture', 'environment'); inp.click(); inp.removeAttribute('capture'); } }}
+              title="Take a photo">
+              <Camera className="w-3.5 h-3.5" />
+            </Button>
+            {/* Voice recording button */}
+            <Button variant="ghost" size="icon" className={`h-9 w-9 shrink-0 ${isRecordingVoice ? 'text-red-400 animate-pulse bg-red-400/10' : 'text-white/40 hover:text-white'}`} 
+              onClick={isRecordingVoice ? stopVoiceRecording : startVoiceRecording}
+              title={isRecordingVoice ? 'Stop recording' : 'Record voice message'}>
+              <Mic className="w-3.5 h-3.5" />
+            </Button>
+            {/* Growing textarea */}
+            <textarea
+              ref={textareaRef}
+              placeholder="Describe your project idea, paste a link, or attach an image..."
+              className="flex-1 min-h-[36px] max-h-[120px] resize-none rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-[11px] text-white placeholder:text-white/30 focus:outline-none focus:border-laser-accent/50 shadow-inner overflow-y-auto"
+              value={input}
+              onChange={(e) => { setInput(e.target.value); autoResize(); }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+              }}
+              rows={1}
             />
             <Button className="accent-btn h-9 px-3 shrink-0 shadow-lg shadow-cyan-500/20 text-[10px]" onClick={sendMessage} title="Send your message to the AI advisor">
             <Zap className="w-3 h-3" />
