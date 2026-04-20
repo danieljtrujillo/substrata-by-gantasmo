@@ -89,9 +89,27 @@ function getAllMarkdown(): string {
   return DOCUMENTATION.map(s => s.content).join('\n\n---\n\n');
 }
 
-function exportAsHTML() {
+async function exportAsHTML() {
   const markdown = getAllMarkdown();
-  const body = renderMarkdown(markdown);
+  let body = renderMarkdown(markdown);
+
+  // Inline all images as base64 data URIs so they display when opened from disk
+  const imgRegex = /<img\s+src="([^"]+)"/g;
+  const imgMatches = [...body.matchAll(imgRegex)];
+  for (const m of imgMatches) {
+    const src = m[1];
+    try {
+      const resp = await fetch(src);
+      const blob = await resp.blob();
+      const dataUri = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.readAsDataURL(blob);
+      });
+      body = body.replaceAll(`src="${src}"`, `src="${dataUri}"`);
+    } catch { /* skip non-fetchable images */ }
+  }
+
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -143,9 +161,40 @@ ${body}
   URL.revokeObjectURL(url);
 }
 
-function exportAsPDF() {
+async function exportAsPDF() {
   const markdown = getAllMarkdown();
-  const body = renderMarkdown(markdown);
+  let body = renderMarkdown(markdown);
+
+  // Pre-render mermaid diagrams to inline SVG before sending to print window
+  const mermaidRegex = /<pre\s+class="mermaid"[^>]*>([\s\S]*?)<\/pre>/g;
+  const mermaidMatches = [...body.matchAll(mermaidRegex)];
+  for (let i = 0; i < mermaidMatches.length; i++) {
+    const m = mermaidMatches[i];
+    const code = m[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+    try {
+      const id = `pdf-mermaid-${Date.now()}-${i}`;
+      const { svg } = await mermaid.render(id, code);
+      body = body.replace(m[0], `<div class="doc-mermaid-container" style="text-align:center;margin:1.5rem 0;">${svg}</div>`);
+    } catch { /* leave as code block if render fails */ }
+  }
+
+  // Also inline images as base64 for PDF
+  const imgRegex = /<img\s+src="([^"]+)"/g;
+  const imgMatches = [...body.matchAll(imgRegex)];
+  for (const im of imgMatches) {
+    const src = im[1];
+    try {
+      const resp = await fetch(src);
+      const blob = await resp.blob();
+      const dataUri = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.readAsDataURL(blob);
+      });
+      body = body.replaceAll(`src="${src}"`, `src="${dataUri}"`);
+    } catch { /* skip */ }
+  }
+
   const printWindow = window.open('', '_blank');
   if (!printWindow) return;
   printWindow.document.write(`<!DOCTYPE html>
@@ -170,19 +219,21 @@ function exportAsPDF() {
     hr { border: none; border-top: 1px solid #e0e0e0; margin: 2rem 0; }
     ul { padding-left: 1.5rem; margin: .5rem 0; }
     li { margin-bottom: .2rem; }
+    .doc-mermaid-container svg { max-width: 100%; height: auto; }
+    .doc-image { max-width: 100%; }
     @page { margin: 1.5cm; }
   </style>
 </head>
 <body>
 ${body}
-<script>window.onload = function() { window.print(); }</script>
+<script>window.onload = function() { window.print(); }<\/script>
 </body>
 </html>`);
   printWindow.document.close();
 }
 
 /* ── Sidebar nav item ─────────────────────────────────────── */
-function NavItem({ section, isActive, onClick }: { section: DocSection; isActive: boolean; onClick: () => void }) {
+function NavItem({ section, isActive, onClick }: { key?: React.Key; section: DocSection; isActive: boolean; onClick: () => void }) {
   const IconComponent = ICON_MAP[section.icon] || BookOpen;
   return (
     <button

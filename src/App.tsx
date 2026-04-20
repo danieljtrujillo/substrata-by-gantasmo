@@ -66,13 +66,22 @@ import {
   Circle,
   Maximize,
   PenTool,
-  LayoutGrid
+  LayoutGrid,
+  Menu,
+  FileDown,
+  Database,
+  CornerUpLeft,
+  Archive,
+  Smartphone,
+  Info,
+  ChevronDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { onAuthStateChanged, CloudflareUser } from './lib/auth';
 import { Canvas } from '@react-three/fiber';
-import { OrbitControls, Stage, PerspectiveCamera, Environment, Grid, Html, Float, ContactShadows, Html, Float, ContactShadows, Html, Float, ContactShadows } from '@react-three/drei';
+import { OrbitControls, Stage, PerspectiveCamera, Environment, Grid, Html, Float, ContactShadows } from '@react-three/drei';
 import * as THREE from 'three';
+import mermaid from 'mermaid';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -156,6 +165,25 @@ function sanitizeSvg(raw: string): string {
   svg.style.maxHeight = '300px';
 
   return svg.outerHTML;
+}
+
+// ── Tooltip Component ──────────────────────────────────────────
+function Tip({ text, children, side = 'top' }: { text: string; children: React.ReactNode; side?: 'top' | 'bottom' | 'left' | 'right' }) {
+  const [show, setShow] = useState(false);
+  const posClass = side === 'top' ? 'bottom-full left-1/2 -translate-x-1/2 mb-1.5'
+    : side === 'bottom' ? 'top-full left-1/2 -translate-x-1/2 mt-1.5'
+    : side === 'left' ? 'right-full top-1/2 -translate-y-1/2 mr-1.5'
+    : 'left-full top-1/2 -translate-y-1/2 ml-1.5';
+  return (
+    <span className="relative inline-flex" onMouseEnter={() => setShow(true)} onMouseLeave={() => setShow(false)}>
+      {children}
+      {show && (
+        <span className={`absolute z-[200] pointer-events-none ${posClass} px-2 py-1 rounded-md bg-black/90 border border-white/10 text-[9px] text-white/80 font-medium whitespace-nowrap shadow-xl backdrop-blur-sm max-w-[200px] text-center leading-tight`}>
+          {text}
+        </span>
+      )}
+    </span>
+  );
 }
 
 // ── OpenSCAD Parser & 3D Renderer ──────────────────────────────
@@ -382,6 +410,33 @@ function extractPrimitives(body: string, moduleName: string, color: string, out:
   }
 }
 
+/* ── Mermaid wiring diagram renderer ─────────────── */
+mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'strict' });
+
+function WiringMermaid({ code }: { code: string }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [svgHtml, setSvgHtml] = useState('');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    const render = async () => {
+      try {
+        const id = `wiring-mermaid-${Date.now()}`;
+        const { svg } = await mermaid.render(id, code);
+        if (!cancelled) { setSvgHtml(svg); setError(''); }
+      } catch (e: any) {
+        if (!cancelled) { setError(e?.message || 'Failed to render diagram'); setSvgHtml(''); }
+      }
+    };
+    render();
+    return () => { cancelled = true; };
+  }, [code]);
+
+  if (error) return <pre className="text-red-400 text-xs font-mono whitespace-pre-wrap">{code}</pre>;
+  return <div ref={containerRef} className="wiring-mermaid-container flex justify-center [&_svg]:max-w-full" dangerouslySetInnerHTML={{ __html: svgHtml }} />;
+}
+
 const PrototypePreview = ({ openscadCode, parts }: { openscadCode: string; parts: Part[] }) => {
   const primitives = useMemo(() => {
     const parsed = parseOpenSCAD(openscadCode);
@@ -554,6 +609,7 @@ export default function App() {
   const [activeDesignFileTab, setActiveDesignFileTab] = useState<'openscad' | 'svg' | 'wiring'>('openscad');
   const [designFileViewMode, setDesignFileViewMode] = useState<'preview' | 'code'>('preview');
   const [selectedPrinter, setSelectedPrinter] = useState('Saturn 3 Ultra');
+  const [selectedLaser, setSelectedLaser] = useState('ACMER S1');
   const [bomSortMode, setBomSortMode] = useState<'fastest' | 'cheapest' | 'none'>('none');
   const [shoppingList, setShoppingList] = useState<Set<string>>(new Set());
   const [generationStage, setGenerationStage] = useState('');
@@ -616,6 +672,20 @@ export default function App() {
   const [labelPrompt, setLabelPrompt] = useState('');
   const [isGeneratingLabel, setIsGeneratingLabel] = useState(false);
   const labelCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  // ── Mobile Menu State ──
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  // ── Component Registry State ──
+  const [showRegistry, setShowRegistry] = useState(false);
+  const [componentRegistry, setComponentRegistry] = useState<{ id: string; name: string; category: string; specs: string; notes: string; addedAt: number }[]>(() => {
+    try { return JSON.parse(localStorage.getItem('substrata_component_registry') || '[]'); } catch { return []; }
+  });
+  const [registryInput, setRegistryInput] = useState('');
+
+  // ── AR Viewer State ──
+  const [arGlbUrl, setArGlbUrl] = useState<string | null>(null);
+  const [showArViewer, setShowArViewer] = useState(false);
 
   // Auth State
   const [user, setUser] = useState<CloudflareUser | null>(null);
@@ -895,6 +965,133 @@ export default function App() {
     toast.success("Silhouette SVG exported for laser cutting");
   };
 
+  // ── STL Export from 3D Scene ──
+  const handleExportSTL = () => {
+    if (!protoProject?.openscadCode) { toast.error('No 3D model to export'); return; }
+    const primitives = parseOpenSCAD(protoProject.openscadCode);
+    if (primitives.length === 0) { toast.error('No geometry parsed'); return; }
+
+    // Build merged geometry for STL
+    const geometries: THREE.BufferGeometry[] = [];
+    for (const prim of primitives) {
+      let geo: THREE.BufferGeometry;
+      if (prim.type === 'cube') geo = new THREE.BoxGeometry(prim.args[0], prim.args[1], prim.args[2]);
+      else if (prim.type === 'cylinder') geo = new THREE.CylinderGeometry(prim.args[0], prim.args[1], prim.args[2], prim.args[3] || 24);
+      else if (prim.type === 'sphere') geo = new THREE.SphereGeometry(prim.args[0], prim.args[1] || 24, prim.args[2] || 24);
+      else continue;
+
+      geo.translate(prim.position[0], prim.position[1], prim.position[2]);
+      if (prim.rotation[0] || prim.rotation[1] || prim.rotation[2]) {
+        geo.rotateX(prim.rotation[0]);
+        geo.rotateY(prim.rotation[1]);
+        geo.rotateZ(prim.rotation[2]);
+      }
+      geometries.push(geo);
+    }
+
+    // Simple ASCII STL export
+    let stl = 'solid substrata_export\n';
+    for (const geo of geometries) {
+      const posAttr = geo.getAttribute('position');
+      const indexAttr = geo.getIndex();
+      const positions = posAttr as THREE.BufferAttribute;
+      if (indexAttr) {
+        for (let i = 0; i < indexAttr.count; i += 3) {
+          const a = indexAttr.getX(i), b = indexAttr.getX(i + 1), c = indexAttr.getX(i + 2);
+          const v0 = new THREE.Vector3(positions.getX(a), positions.getY(a), positions.getZ(a));
+          const v1 = new THREE.Vector3(positions.getX(b), positions.getY(b), positions.getZ(b));
+          const v2 = new THREE.Vector3(positions.getX(c), positions.getY(c), positions.getZ(c));
+          const normal = new THREE.Vector3().crossVectors(new THREE.Vector3().subVectors(v1, v0), new THREE.Vector3().subVectors(v2, v0)).normalize();
+          stl += `  facet normal ${normal.x} ${normal.y} ${normal.z}\n    outer loop\n      vertex ${v0.x} ${v0.y} ${v0.z}\n      vertex ${v1.x} ${v1.y} ${v1.z}\n      vertex ${v2.x} ${v2.y} ${v2.z}\n    endloop\n  endfacet\n`;
+        }
+      }
+      geo.dispose();
+    }
+    stl += 'endsolid substrata_export\n';
+
+    const blob = new Blob([stl], { type: 'model/stl' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${(protoProject.name || 'model').replace(/[^a-zA-Z0-9]/g, '_')}.stl`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success('STL mesh exported!');
+  };
+
+  // ── GLB Export from 3D Scene ──
+  const buildSceneGeometries = (): { mesh: THREE.Mesh; color: string }[] => {
+    if (!protoProject?.openscadCode) return [];
+    const primitives = parseOpenSCAD(protoProject.openscadCode);
+    return primitives.map(prim => {
+      let geo: THREE.BufferGeometry;
+      if (prim.type === 'cube') geo = new THREE.BoxGeometry(prim.args[0], prim.args[1], prim.args[2]);
+      else if (prim.type === 'cylinder') geo = new THREE.CylinderGeometry(prim.args[0], prim.args[1], prim.args[2], prim.args[3] || 24);
+      else if (prim.type === 'sphere') geo = new THREE.SphereGeometry(prim.args[0], prim.args[1] || 24, prim.args[2] || 24);
+      else geo = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+
+      const mat = new THREE.MeshStandardMaterial({ color: prim.color, roughness: 0.4, metalness: 0.3 });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(prim.position[0], prim.position[1], prim.position[2]);
+      mesh.rotation.set(prim.rotation[0], prim.rotation[1], prim.rotation[2]);
+      mesh.name = prim.label;
+      return { mesh, color: prim.color };
+    });
+  };
+
+  const handleExportGLB = async () => {
+    if (!protoProject?.openscadCode) { toast.error('No 3D model to export'); return; }
+    const meshes = buildSceneGeometries();
+    if (meshes.length === 0) { toast.error('No geometry parsed'); return; }
+
+    // Dynamically import GLTFExporter
+    const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js');
+    const exporter = new GLTFExporter();
+    const scene = new THREE.Scene();
+    meshes.forEach(({ mesh }) => scene.add(mesh));
+
+    exporter.parse(scene, (result) => {
+      const output = result as ArrayBuffer;
+      const blob = new Blob([output], { type: 'model/gltf-binary' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${(protoProject.name || 'model').replace(/[^a-zA-Z0-9]/g, '_')}.glb`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success('GLB mesh exported!');
+    }, (error) => {
+      console.error('GLB export error:', error);
+      toast.error('Failed to export GLB');
+    }, { binary: true });
+  };
+
+  // ── View in AR ──
+  const handleViewInAR = async () => {
+    if (!protoProject?.openscadCode) { toast.error('No 3D model for AR'); return; }
+    const meshes = buildSceneGeometries();
+    if (meshes.length === 0) { toast.error('No geometry parsed'); return; }
+
+    toast.info('Preparing AR model...');
+    const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js');
+    const exporter = new GLTFExporter();
+    const scene = new THREE.Scene();
+    meshes.forEach(({ mesh }) => scene.add(mesh));
+
+    exporter.parse(scene, (result) => {
+      // Revoke previous URL if any
+      if (arGlbUrl) URL.revokeObjectURL(arGlbUrl);
+      const output = result as ArrayBuffer;
+      const blob = new Blob([output], { type: 'model/gltf-binary' });
+      const url = URL.createObjectURL(blob);
+      setArGlbUrl(url);
+      setShowArViewer(true);
+    }, (error) => {
+      console.error('AR export error:', error);
+      toast.error('Failed to prepare AR model');
+    }, { binary: true });
+  };
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
 
@@ -1000,6 +1197,43 @@ export default function App() {
   };
 
   const startRecording = async () => {
+    // Use Web Speech API for instant recognition if available
+    const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
+    if (SpeechRecognition) {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'en-US';
+      (window as any).__substrata_recognition = recognition;
+
+      let finalTranscript = '';
+      recognition.onresult = (event: any) => {
+        let interim = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalTranscript += transcript + ' ';
+          } else {
+            interim = transcript;
+          }
+        }
+        // Show live transcript as user speaks
+        setDesignPrompt(finalTranscript + interim);
+      };
+      recognition.onerror = () => {
+        setIsTranscribing(false);
+        toast.error("Speech recognition error");
+      };
+      recognition.onend = () => {
+        setIsTranscribing(false);
+        if (finalTranscript.trim()) toast.success("Voice transcribed!");
+      };
+      recognition.start();
+      setIsTranscribing(true);
+      return;
+    }
+
+    // Fallback: MediaRecorder + Gemini transcription
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
@@ -1030,13 +1264,21 @@ export default function App() {
       };
 
       mediaRecorder.start();
-      setIsTranscribing(true); // Shared state for recording UI
+      setIsTranscribing(true);
     } catch (e) {
       toast.error("Microphone access denied");
     }
   };
 
   const stopRecording = () => {
+    // Stop Web Speech API if active
+    const recognition = (window as any).__substrata_recognition;
+    if (recognition) {
+      recognition.stop();
+      (window as any).__substrata_recognition = null;
+      return;
+    }
+    // Fallback: stop MediaRecorder
     mediaRecorderRef.current?.stop();
     setIsTranscribing(false);
   };
@@ -1064,6 +1306,109 @@ export default function App() {
     setProtoPrompt(projectDescription);
     handleGeneratePrototype(projectDescription);
     toast.success("Blueprint generation triggered from Advisor!");
+  };
+
+  // ── Component Registry Handlers ──
+  useEffect(() => {
+    localStorage.setItem('substrata_component_registry', JSON.stringify(componentRegistry));
+  }, [componentRegistry]);
+
+  const handleAddToRegistry = (name: string, category: string, specs: string) => {
+    const item = { id: `reg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, name, category, specs, notes: '', addedAt: Date.now() };
+    setComponentRegistry(prev => [...prev, item]);
+    toast.success(`Added "${name}" to registry`);
+  };
+
+  const handleRemoveFromRegistry = (id: string) => {
+    setComponentRegistry(prev => prev.filter(c => c.id !== id));
+  };
+
+  const getRegistrySummary = () => {
+    if (componentRegistry.length === 0) return '';
+    const groups = componentRegistry.reduce((acc, c) => {
+      if (!acc[c.category]) acc[c.category] = [];
+      acc[c.category].push(c.name + (c.specs ? ` (${c.specs})` : ''));
+      return acc;
+    }, {} as Record<string, string[]>);
+    return Object.entries(groups).map(([cat, items]) => `${cat}: ${items.join(', ')}`).join('; ');
+  };
+
+  // ── Export All Handler ──
+  const handleExportAll = () => {
+    if (!protoProject) { toast.error('No project to export'); return; }
+    const p = protoProject;
+    const totalCost = p.parts.reduce((s, part) => s + part.price, 0);
+
+    const doc = [
+      `# ${p.name || 'Untitled Project'}`,
+      `> Generated by SUBSTRATA by GANTASMO`,
+      `> Date: ${new Date().toISOString().split('T')[0]}`,
+      ``,
+      `## Project Description`,
+      p.description || 'No description provided.',
+      ``,
+      ...(p.designNotes ? [`## Design Notes`, p.designNotes, ``] : []),
+      `## Bill of Materials (${p.parts.length} parts — $${totalCost.toFixed(2)} total)`,
+      ``,
+      `| # | Part | Source | Price | Lead Time | Specs |`,
+      `|---|------|--------|-------|-----------|-------|`,
+      ...p.parts.map((part, i) => `| ${i + 1} | ${part.name} | ${part.source} | $${part.price.toFixed(2)} | ${part.speed} | ${part.specs} |`),
+      ``,
+      ...(p.assemblySteps.length > 0 ? [
+        `## Assembly Instructions`,
+        ...p.assemblySteps.map((step, i) => `${i + 1}. ${step}`),
+        ``
+      ] : []),
+      ...(p.openscadCode && !p.openscadCode.startsWith('//') ? [
+        `## 3D Model (OpenSCAD)`,
+        '```scad',
+        p.openscadCode,
+        '```',
+        ``
+      ] : []),
+      ...(p.svgDesign ? [
+        `## Laser Cut / SVG Design`,
+        '```svg',
+        p.svgDesign,
+        '```',
+        ``
+      ] : []),
+      ...(p.wiringDiagram && p.wiringDiagram !== 'No electronics in this design' ? [
+        `## Wiring Diagram`,
+        '```',
+        p.wiringDiagram,
+        '```',
+        ``
+      ] : []),
+      ...(p.code ? [
+        `## Firmware / Control Code`,
+        '```python',
+        p.code,
+        '```',
+        ``
+      ] : []),
+      ...(p.communityRefs && p.communityRefs.length > 0 ? [
+        `## Community References`,
+        ...p.communityRefs.map(ref => `- ${ref}`),
+        ``
+      ] : []),
+      ...(componentRegistry.length > 0 ? [
+        `## Component Inventory`,
+        ...componentRegistry.map(c => `- **${c.name}** [${c.category}] — ${c.specs}${c.notes ? ` (${c.notes})` : ''}`),
+        ``
+      ] : []),
+      `---`,
+      `*Exported from SUBSTRATA by GANTASMO • gantasmo.ai*`
+    ].join('\n');
+
+    const blob = new Blob([doc], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${(p.name || 'project').replace(/[^a-zA-Z0-9]/g, '_')}_full_export.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success('Full project exported as Markdown!');
   };
 
   // Sorted parts memo for BOM
@@ -1099,7 +1444,11 @@ export default function App() {
         setGenerationStage(GENERATION_STAGES[stageIdx]);
       }, 2500);
 
-      const data = await generateProjectBlueprint(activePrompt, designStyle, selectedPrinter, '', referenceImage || undefined);
+      const registrySummary = getRegistrySummary();
+      const enrichedPrompt = registrySummary 
+        ? `${activePrompt}\n\n[User's existing component inventory: ${registrySummary}]` 
+        : activePrompt;
+      const data = await generateProjectBlueprint(enrichedPrompt, designStyle, selectedPrinter, '', referenceImage || undefined);
       
       clearInterval(progressInterval);
       setProtoGenerationProgress(90);
@@ -1281,15 +1630,23 @@ export default function App() {
                   .map(template => (
                   <Card key={template.id} className="group overflow-hidden glass-panel border-white/10 cursor-pointer hover:shadow-cyan-500/10 transition-all"
                     onClick={() => {
-                      if (template.suggestedPrompt) {
-                        setDesignPrompt(template.suggestedPrompt);
-                        if (template.openscadSnippet && engineeringMode === 'prototype') {
-                          setProtoProject(prev => prev ? { ...prev, openscadCode: template.openscadSnippet! } : null);
-                        }
-                      }
+                      const prompt = template.suggestedPrompt || template.name;
+                      setDesignPrompt(prompt);
                       setOriginalImage(template.image);
                       setShowLibrary(false);
-                      toast.info(`Loaded ${template.name}`);
+                      toast.info(`Loading ${template.name}...`);
+
+                      // Auto-trigger generation based on category/mode
+                      const cat = template.category.toLowerCase();
+                      const is3D = cat.includes('3d') || cat.includes('electronics') || cat.includes('architecture') || cat.includes('wearable') || cat.includes('vehicle') || cat.includes('science') || cat.includes('outdoor') || cat.includes('bleeding');
+                      if (is3D || engineeringMode === 'prototype') {
+                        setEngineeringMode('prototype');
+                        setTimeout(() => handleGeneratePrototype(prompt), 100);
+                      } else if (cat.includes('laser') || engineeringMode === 'laser') {
+                        setEngineeringMode('laser');
+                        setDesignPrompt(prompt);
+                        setTimeout(() => handleGenerate(), 100);
+                      }
                     }}>
                     <div className="aspect-[4/3] relative flex items-center justify-center bg-black/20 overflow-hidden">
                       <img src={template.image} alt={template.name} className="object-cover w-full h-full opacity-60 group-hover:opacity-100 transition-opacity" referrerPolicy="no-referrer" />
@@ -1321,6 +1678,169 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      {/* AR Viewer Modal */}
+      <AnimatePresence>
+        {showArViewer && arGlbUrl && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[90] bg-black/80 backdrop-blur-md flex items-center justify-center p-4"
+            onClick={() => setShowArViewer(false)}>
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }}
+              className="relative w-full max-w-2xl aspect-square bg-black/60 rounded-2xl border border-white/10 overflow-hidden"
+              onClick={e => e.stopPropagation()}>
+              <div className="absolute top-3 left-3 z-10 flex items-center gap-2">
+                <Smartphone className="w-4 h-4 text-orange-400" />
+                <span className="text-xs font-black uppercase tracking-widest text-white">AR / 3D Viewer</span>
+              </div>
+              <Button variant="ghost" size="icon" className="absolute top-3 right-3 z-10 h-8 w-8 text-white/60 hover:text-white"
+                onClick={() => setShowArViewer(false)}>
+                <X className="w-4 h-4" />
+              </Button>
+              {/* @google/model-viewer web component */}
+              <div className="w-full h-full" dangerouslySetInnerHTML={{ __html: `
+                <model-viewer
+                  src="${arGlbUrl}"
+                  ar
+                  ar-modes="webxr scene-viewer quick-look"
+                  camera-controls
+                  touch-action="pan-y"
+                  auto-rotate
+                  shadow-intensity="1"
+                  exposure="1"
+                  style="width:100%;height:100%;background:transparent;"
+                >
+                  <button slot="ar-button" style="
+                    position:absolute;bottom:16px;left:50%;transform:translateX(-50%);
+                    background:linear-gradient(135deg,#f97316,#ea580c);color:white;
+                    border:none;border-radius:9999px;padding:10px 24px;font-size:12px;
+                    font-weight:900;text-transform:uppercase;letter-spacing:2px;cursor:pointer;
+                    box-shadow:0 4px 20px rgba(249,115,22,0.4);
+                  ">
+                    View in AR
+                  </button>
+                </model-viewer>
+              ` }} />
+              <div className="absolute bottom-3 right-3 z-10 flex gap-2">
+                <Button size="sm" className="h-7 text-[9px] font-bold uppercase bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 border border-purple-500/20"
+                  onClick={handleExportGLB}>
+                  <Download className="w-3 h-3 mr-1" /> Export GLB
+                </Button>
+                <a href={arGlbUrl} download={`${(protoProject?.name || 'model').replace(/[^a-zA-Z0-9]/g, '_')}.glb`}
+                  className="inline-flex items-center h-7 px-3 text-[9px] font-bold uppercase bg-green-500/20 text-green-300 hover:bg-green-500/30 border border-green-500/20 rounded-md">
+                  <FileDown className="w-3 h-3 mr-1" /> Download GLB
+                </a>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Component Registry Drawer */}
+      <AnimatePresence>
+        {showRegistry && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[80] bg-black/60 backdrop-blur-sm" onClick={() => setShowRegistry(false)}>
+            <motion.div initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="absolute right-0 top-0 bottom-0 w-full max-w-lg glass-panel !rounded-none border-l border-white/10 overflow-auto"
+              onClick={e => e.stopPropagation()}>
+              <div className="p-4 border-b border-white/10 flex items-center justify-between sticky top-0 bg-black/60 backdrop-blur-xl z-10">
+                <div className="flex items-center gap-2">
+                  <Database className="w-4 h-4 text-laser-accent" />
+                  <h2 className="text-sm font-black uppercase tracking-widest text-white">Component Registry</h2>
+                  <Badge className="bg-laser-accent/20 text-laser-accent text-[8px] px-1.5 py-0">{componentRegistry.length}</Badge>
+                </div>
+                <Button variant="ghost" size="icon" onClick={() => setShowRegistry(false)} className="h-8 w-8 text-white/60 hover:text-white"><X className="w-4 h-4" /></Button>
+              </div>
+              <div className="p-4 space-y-4">
+                {/* Quick Add */}
+                <div className="space-y-2">
+                  <label className="text-[9px] font-black uppercase tracking-widest text-white/50">Quick Add Component</label>
+                  <div className="flex gap-2">
+                    <Input placeholder="e.g. Nema 17 Stepper Motor" className="glass-input h-9 border-white/10 text-sm flex-1"
+                      value={registryInput} onChange={e => setRegistryInput(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && registryInput.trim()) {
+                          handleAddToRegistry(registryInput.trim(), 'General', '');
+                          setRegistryInput('');
+                        }
+                      }} />
+                    <Button className="accent-btn h-9 px-3" onClick={() => {
+                      if (registryInput.trim()) { handleAddToRegistry(registryInput.trim(), 'General', ''); setRegistryInput(''); }
+                    }}><Plus className="w-3.5 h-3.5" /></Button>
+                  </div>
+                </div>
+
+                {/* Add from current project BOM */}
+                {protoProject && protoProject.parts.length > 0 && (
+                  <div className="space-y-2">
+                    <label className="text-[9px] font-black uppercase tracking-widest text-white/50">From Current Project</label>
+                    <div className="grid grid-cols-1 gap-1.5">
+                      {protoProject.parts.filter(p => !componentRegistry.some(c => c.name === p.name)).slice(0, 6).map(part => (
+                        <button key={part.id}
+                          onClick={() => handleAddToRegistry(part.name, part.category || 'Component', part.specs)}
+                          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 hover:border-laser-accent/30 transition-colors text-left">
+                          <Plus className="w-3 h-3 text-laser-accent shrink-0" />
+                          <div>
+                            <p className="text-[10px] font-bold text-white/80">{part.name}</p>
+                            <p className="text-[8px] text-white/40">{part.specs}</p>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Registry Inventory */}
+                <div className="space-y-2">
+                  <label className="text-[9px] font-black uppercase tracking-widest text-white/50">
+                    Inventory ({componentRegistry.length} components)
+                  </label>
+                  {componentRegistry.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-8 text-white/20">
+                      <Archive className="w-8 h-8 mb-2" />
+                      <p className="text-[10px] font-bold uppercase tracking-wider">No components registered</p>
+                      <p className="text-[9px] mt-1 text-white/15">Add components to build your inventory</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {componentRegistry.map(comp => (
+                        <div key={comp.id} className="flex items-center justify-between px-3 py-2 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 transition-colors group">
+                          <div className="flex items-center gap-2">
+                            <Package className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                            <div>
+                              <p className="text-[10px] font-bold text-white/80">{comp.name}</p>
+                              <div className="flex items-center gap-1.5">
+                                <Badge variant="secondary" className="bg-blue-500/10 text-blue-400 text-[7px] px-1 py-0">{comp.category}</Badge>
+                                {comp.specs && <span className="text-[8px] text-white/40 font-mono">{comp.specs}</span>}
+                              </div>
+                            </div>
+                          </div>
+                          <button onClick={() => handleRemoveFromRegistry(comp.id)}
+                            className="text-white/20 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100">
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Summary for AI context */}
+                {componentRegistry.length > 0 && (
+                  <div className="space-y-2 pt-2 border-t border-white/10">
+                    <label className="text-[9px] font-black uppercase tracking-widest text-white/50">AI Context Summary</label>
+                    <p className="text-[10px] text-white/40 bg-white/5 rounded p-2 border border-white/10 font-mono">
+                      {getRegistrySummary()}
+                    </p>
+                    <p className="text-[8px] text-white/30 italic">This summary is automatically injected into AI prompts to save context and tokens.</p>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Maintenance Drawer */}
       <AnimatePresence>
         {showMaintenance && (
@@ -1334,7 +1854,7 @@ export default function App() {
                 <h2 className="text-sm font-black uppercase tracking-widest text-white">Maintenance</h2>
                 <Button variant="ghost" size="icon" onClick={() => setShowMaintenance(false)} className="h-8 w-8 text-white/60 hover:text-white"><X className="w-4 h-4" /></Button>
               </div>
-              <div className="p-4"><MaintenanceDashboard /></div>
+              <div className="p-4"><MaintenanceDashboard selectedPrinter={selectedPrinter} selectedLaser={selectedLaser} onChangePrinter={setSelectedPrinter} onChangeLaser={setSelectedLaser} /></div>
             </motion.div>
           </motion.div>
         )}
@@ -1454,8 +1974,8 @@ export default function App() {
       </AnimatePresence>
 
       {/* ═══════ TOOLBAR ═══════ */}
-      <header className="h-10 shrink-0 px-3 border-b border-white/10 bg-black/40 backdrop-blur-xl flex items-center justify-between z-50">
-        <div className="flex items-center gap-3">
+      <header className="h-auto min-h-10 shrink-0 px-3 border-b border-white/10 bg-black/40 backdrop-blur-xl flex flex-wrap items-center justify-between z-50 gap-y-1 py-1">
+        <div className="flex items-center gap-2 sm:gap-3">
           <div className="flex items-center gap-2">
             <div className="bg-laser-accent p-1 rounded shadow-[0_0_15px_rgba(0,242,255,0.4)]">
               <Layers className="text-black w-3.5 h-3.5" />
@@ -1466,16 +1986,16 @@ export default function App() {
             </div>
           </div>
 
-          <Separator orientation="vertical" className="h-5 bg-white/10 mx-1" />
+          <Separator orientation="vertical" className="h-5 bg-white/10 mx-0.5 hidden sm:block" />
 
-          {/* Mode switcher */}
+          {/* Mode switcher — always visible */}
           <div className="flex bg-white/5 rounded-md border border-white/5 p-0.5">
-            <button onClick={() => setEngineeringMode('prototype')} className={`px-2.5 py-1 text-[9px] font-black uppercase tracking-wider rounded-sm transition-all ${engineeringMode === 'prototype' ? 'bg-blue-600 text-white' : 'text-white/40 hover:text-white/70'}`}>3D Prototype</button>
-            <button onClick={() => setEngineeringMode('laser')} className={`px-2.5 py-1 text-[9px] font-black uppercase tracking-wider rounded-sm transition-all ${engineeringMode === 'laser' ? 'bg-laser-accent text-black' : 'text-white/40 hover:text-white/70'}`}>Laser Studio</button>
-            <button onClick={() => setEngineeringMode('label')} className={`px-2.5 py-1 text-[9px] font-black uppercase tracking-wider rounded-sm transition-all ${engineeringMode === 'label' ? 'bg-orange-500 text-white' : 'text-white/40 hover:text-white/70'}`}>Labels</button>
+            <button onClick={() => setEngineeringMode('prototype')} title="Design 3D objects for 3D printing" className={`px-1.5 sm:px-2.5 py-1 text-[8px] sm:text-[9px] font-black uppercase tracking-wider rounded-sm transition-all ${engineeringMode === 'prototype' ? 'bg-blue-600 text-white' : 'text-white/40 hover:text-white/70'}`}>3D</button>
+            <button onClick={() => setEngineeringMode('laser')} title="Prepare images for laser engraving and cutting" className={`px-1.5 sm:px-2.5 py-1 text-[8px] sm:text-[9px] font-black uppercase tracking-wider rounded-sm transition-all ${engineeringMode === 'laser' ? 'bg-laser-accent text-black' : 'text-white/40 hover:text-white/70'}`}>Laser</button>
+            <button onClick={() => setEngineeringMode('label')} title="Design and print labels on a label printer" className={`px-1.5 sm:px-2.5 py-1 text-[8px] sm:text-[9px] font-black uppercase tracking-wider rounded-sm transition-all ${engineeringMode === 'label' ? 'bg-orange-500 text-white' : 'text-white/40 hover:text-white/70'}`}>Labels</button>
           </div>
 
-          {/* Design style */}
+          {/* Design style — hidden on mobile */}
           <div className="hidden md:flex gap-0.5 ml-2">
             {(['minimalist', 'deconstructivist', 'classical', 'organic'] as const).map(s => (
               <button key={s} onClick={() => setDesignStyle(s)}
@@ -1487,29 +2007,68 @@ export default function App() {
           </div>
         </div>
 
-        <div className="flex items-center gap-1.5">
-          <Button variant="ghost" size="sm" onClick={() => setShowLibrary(true)} className="h-7 text-[9px] font-bold uppercase text-white/50 hover:text-white hover:bg-white/10 gap-1">
-            <Library className="w-3.5 h-3.5" /> Library
-          </Button>
-          <Button variant="ghost" size="sm" onClick={() => setShowMaintenance(true)} className="h-7 text-[9px] font-bold uppercase text-white/50 hover:text-white hover:bg-white/10 gap-1">
-            <Settings className="w-3.5 h-3.5" /> Maint.
-          </Button>
-          <Button variant="ghost" size="sm" onClick={() => setShowDocs(true)} className="h-7 text-[9px] font-bold uppercase text-white/50 hover:text-white hover:bg-white/10 gap-1">
-            <BookOpen className="w-3.5 h-3.5" /> Docs
-          </Button>
-          <Button variant="ghost" size="sm" onClick={() => setShowConceptPanel(true)} className="h-7 text-[9px] font-bold uppercase text-white/50 hover:text-white hover:bg-white/10 gap-1">
-            <PenTool className="w-3.5 h-3.5" /> Sketch
-          </Button>
-          <Separator orientation="vertical" className="h-5 bg-white/10 mx-1" />
-          <Button size="sm" className="accent-btn h-7 text-[9px] shadow-[0_0_12px_rgba(0,242,255,0.2)]" onClick={handleSaveProject}>
+        <div className="flex items-center gap-1 sm:gap-1.5">
+          {/* Desktop buttons */}
+          <div className="hidden sm:flex items-center gap-1.5">
+            <Button variant="ghost" size="sm" onClick={() => setShowLibrary(true)} title="Browse ready-made templates you can use as starting points" className="h-7 text-[9px] font-bold uppercase text-white/50 hover:text-white hover:bg-white/10 gap-1">
+              <Library className="w-3.5 h-3.5" /> Library
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setShowRegistry(true)} title="See all parts and components you have saved" className="h-7 text-[9px] font-bold uppercase text-white/50 hover:text-white hover:bg-white/10 gap-1">
+              <Database className="w-3.5 h-3.5" /> Registry
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setShowMaintenance(true)} title="Check machine health, troubleshoot problems, and do upkeep" className="h-7 text-[9px] font-bold uppercase text-white/50 hover:text-white hover:bg-white/10 gap-1">
+              <Settings className="w-3.5 h-3.5" /> Maint.
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setShowDocs(true)} title="View the full project documentation and export it" className="h-7 text-[9px] font-bold uppercase text-white/50 hover:text-white hover:bg-white/10 gap-1">
+              <BookOpen className="w-3.5 h-3.5" /> Docs
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setShowConceptPanel(true)} title="Draw a quick sketch and turn it into a 3D design" className="h-7 text-[9px] font-bold uppercase text-white/50 hover:text-white hover:bg-white/10 gap-1">
+              <PenTool className="w-3.5 h-3.5" /> Sketch
+            </Button>
+          </div>
+
+          {/* Mobile hamburger */}
+          <div className="relative sm:hidden">
+            <Button variant="ghost" size="icon" onClick={() => setMobileMenuOpen(!mobileMenuOpen)} className="h-7 w-7 text-white/50 hover:text-white" title="Open navigation menu">
+              <Menu className="w-4 h-4" />
+            </Button>
+            {mobileMenuOpen && (
+              <div className="absolute right-0 top-8 w-44 glass-panel border border-white/10 rounded-lg py-1 z-[100] shadow-2xl">
+                {[
+                  { label: 'Library', icon: Library, action: () => setShowLibrary(true) },
+                  { label: 'Registry', icon: Database, action: () => setShowRegistry(true) },
+                  { label: 'Maintenance', icon: Settings, action: () => setShowMaintenance(true) },
+                  { label: 'Docs', icon: BookOpen, action: () => setShowDocs(true) },
+                  { label: 'Sketch', icon: PenTool, action: () => setShowConceptPanel(true) },
+                ].map(item => (
+                  <button key={item.label} onClick={() => { item.action(); setMobileMenuOpen(false); }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-white/60 hover:text-white hover:bg-white/10 transition-colors">
+                    <item.icon className="w-3.5 h-3.5" /> {item.label}
+                  </button>
+                ))}
+                {/* Mobile style selector */}
+                <div className="border-t border-white/10 px-3 py-2 flex gap-1 flex-wrap">
+                  {(['minimalist', 'deconstructivist', 'classical', 'organic'] as const).map(s => (
+                    <button key={s} onClick={() => { setDesignStyle(s); setMobileMenuOpen(false); }}
+                      className={`px-1.5 py-0.5 text-[7px] font-black uppercase rounded border ${designStyle === s ? 'bg-blue-600 text-white border-blue-600' : 'border-white/10 text-white/30'}`}>
+                      {s.slice(0, 4)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <Separator orientation="vertical" className="h-5 bg-white/10 mx-0.5 hidden sm:block" />
+          <Button size="sm" className="accent-btn h-7 text-[9px] shadow-[0_0_12px_rgba(0,242,255,0.2)]" onClick={handleSaveProject} title="Save your project to the cloud">
             <Save className="w-3 h-3 mr-1" /> Save
           </Button>
           {user ? (
-            <Button variant="ghost" size="icon" onClick={logout} className="rounded-full overflow-hidden border border-white/10 h-7 w-7 hover:bg-white/10">
+            <Button variant="ghost" size="icon" onClick={logout} title="Sign out of your account" className="rounded-full overflow-hidden border border-white/10 h-7 w-7 hover:bg-white/10">
               {user.photoURL ? <img src={user.photoURL} alt="" className="w-full h-full object-cover" /> : <UserIcon className="w-3.5 h-3.5" />}
             </Button>
           ) : (
-            <Button variant="ghost" size="sm" onClick={loginWithGoogle} className="h-7 text-[9px] border border-white/10 text-white/60 hover:text-white gap-1">
+            <Button variant="ghost" size="sm" onClick={loginWithGoogle} title="Sign in with Google to save your work" className="h-7 text-[9px] border border-white/10 text-white/60 hover:text-white gap-1">
               <UserIcon className="w-3 h-3" /> Sign In
             </Button>
           )}
@@ -1530,7 +2089,7 @@ export default function App() {
           />
         </div>
         {/* Advisor toggle (always visible) */}
-        <button onClick={() => setAdvisorCollapsed(!advisorCollapsed)}
+        <button onClick={() => setAdvisorCollapsed(!advisorCollapsed)} title="Show or hide the AI chat assistant"
           className="shrink-0 w-5 flex items-center justify-center border-r border-white/5 bg-black/20 hover:bg-white/5 transition-colors text-white/30 hover:text-white/60">
           <PanelLeft className={`w-3 h-3 transition-transform ${advisorCollapsed ? 'rotate-180' : ''}`} />
         </button>
@@ -1550,13 +2109,13 @@ export default function App() {
                       <img src={processedImage} alt="Processed" className="max-w-full max-h-full shadow-2xl rounded-sm pixelated border border-white/20"
                         style={{ imageRendering: procOptions.dither ? 'pixelated' : 'auto' }} />
                       <div className="absolute top-3 right-3 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <Button size="sm" variant="secondary" onClick={() => setIsAdvancedEditorOpen(true)} className="bg-laser-accent/90 text-black hover:bg-laser-accent font-bold h-7 text-[10px]">
+                        <Button size="sm" variant="secondary" onClick={() => setIsAdvancedEditorOpen(true)} className="bg-laser-accent/90 text-black hover:bg-laser-accent font-bold h-7 text-[10px]" title="Open the full image editor with more tools">
                           <Edit2 className="w-3 h-3 mr-1" /> Studio
                         </Button>
-                        <Button size="icon" variant="secondary" className="glass-panel h-7 w-7 hover:bg-white/20 text-laser-accent" onClick={handleExportRaster} title="Export PNG"><FileImage className="w-3 h-3" /></Button>
-                        <Button size="icon" variant="secondary" className="glass-panel h-7 w-7 hover:bg-white/20 text-laser-accent" onClick={handleExportVector} title="Export SVG"><FileCode className="w-3 h-3" /></Button>
-                        <Button size="icon" variant="secondary" className="glass-panel h-7 w-7 hover:bg-white/20" onClick={() => { setOriginalImage(null); setProcessedImage(null); }}><Trash2 className="w-3 h-3 text-red-400" /></Button>
-                        <Button size="icon" variant="secondary" className="glass-panel h-7 w-7 hover:bg-white/20" onClick={handleAnalyzeMaterial} disabled={isAnalyzing}>
+                        <Button size="icon" variant="secondary" className="glass-panel h-7 w-7 hover:bg-white/20 text-laser-accent" onClick={handleExportRaster} title="Download the image as a PNG file"><FileImage className="w-3 h-3" /></Button>
+                        <Button size="icon" variant="secondary" className="glass-panel h-7 w-7 hover:bg-white/20 text-laser-accent" onClick={handleExportVector} title="Download the image as an SVG vector file"><FileCode className="w-3 h-3" /></Button>
+                        <Button size="icon" variant="secondary" className="glass-panel h-7 w-7 hover:bg-white/20" onClick={() => { setOriginalImage(null); setProcessedImage(null); }} title="Delete the current image"><Trash2 className="w-3 h-3 text-red-400" /></Button>
+                        <Button size="icon" variant="secondary" className="glass-panel h-7 w-7 hover:bg-white/20" onClick={handleAnalyzeMaterial} disabled={isAnalyzing} title="Use AI to detect the material and suggest laser settings">
                           {isAnalyzing ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3 text-laser-accent" />}
                         </Button>
                       </div>
@@ -1593,10 +2152,11 @@ export default function App() {
                         value={designPrompt} onChange={e => setDesignPrompt(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleGenerate()} />
                       <div className="absolute right-1 top-1 flex gap-1">
                         <Button size="icon" variant="ghost" className={`h-8 w-8 transition-colors ${isTranscribing ? 'text-red-400 bg-red-500/10' : 'text-white/40'}`}
-                          onMouseDown={startRecording} onMouseUp={stopRecording} onTouchStart={startRecording} onTouchEnd={stopRecording}>
+                          onMouseDown={startRecording} onMouseUp={stopRecording} onTouchStart={startRecording} onTouchEnd={stopRecording}
+                          title="Hold to speak your design idea out loud">
                           {isTranscribing ? <Mic className="w-4 h-4 animate-pulse" /> : <Mic className="w-4 h-4" />}
                         </Button>
-                        <Button size="icon" className="h-8 w-8 accent-btn" onClick={handleGenerate} disabled={isGenerating || !designPrompt}>
+                        <Button size="icon" className="h-8 w-8 accent-btn" onClick={handleGenerate} disabled={isGenerating || !designPrompt} title="Generate a laser design from your description">
                           {isGenerating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ChevronRight className="w-4 h-4" />}
                         </Button>
                       </div>
@@ -1605,7 +2165,7 @@ export default function App() {
                   <div className="flex flex-wrap gap-1.5 mt-2">
                     <p className="text-[9px] text-white/30 mt-0.5 pr-1">Presets:</p>
                     {['Tribal Mask', 'Sacred Geometry', 'Minimalist Cat', 'Floral Frame'].map(p => (
-                      <button key={p} onClick={() => setDesignPrompt(p)} className="text-[9px] font-bold uppercase tracking-widest px-2 py-1 glass-panel border-white/10 text-white/60 hover:border-laser-accent hover:text-laser-accent transition-colors">{p}</button>
+                      <button key={p} onClick={() => setDesignPrompt(p)} title={`Fill in the prompt with "${p}" so you can generate it quickly`} className="text-[9px] font-bold uppercase tracking-widest px-2 py-1 glass-panel border-white/10 text-white/60 hover:border-laser-accent hover:text-laser-accent transition-colors">{p}</button>
                     ))}
                   </div>
                   {/* Reference Image */}
@@ -1614,7 +2174,7 @@ export default function App() {
                       const file = e.target.files?.[0];
                       if (file) { const r = new FileReader(); r.onload = ev => setReferenceImage(ev.target?.result as string); r.readAsDataURL(file); }
                     }} />
-                    <button onClick={() => referenceInputRef.current?.click()}
+                    <button onClick={() => referenceInputRef.current?.click()} title="Upload a picture for the AI to use as a design reference"
                       className="text-[9px] font-bold uppercase tracking-widest px-2 py-1 glass-panel border-white/10 text-white/40 hover:text-laser-accent hover:border-laser-accent transition-colors flex items-center gap-1">
                       <ImageIcon className="w-3 h-3" /> {referenceImage ? 'Change Ref' : 'Add Reference'}
                     </button>
@@ -1649,22 +2209,34 @@ export default function App() {
                 {/* 3D overlay controls */}
                 <div className="absolute bottom-3 left-3 flex gap-2">
                   <Card className="bg-black/80 backdrop-blur-md border border-white/10 p-1.5 flex gap-1">
-                    <Button size="icon" variant="ghost" className="h-7 w-7 text-white/60 hover:text-white"><Layers className="w-3.5 h-3.5" /></Button>
-                    <Button size="icon" variant="ghost" className="h-7 w-7 text-white/60 hover:text-white"><Settings2 className="w-3.5 h-3.5" /></Button>
+                    <Button size="icon" variant="ghost" className="h-7 w-7 text-white/60 hover:text-white" title="Toggle scene layers"><Layers className="w-3.5 h-3.5" /></Button>
+                    <Button size="icon" variant="ghost" className="h-7 w-7 text-white/60 hover:text-white" title="Open viewport settings"><Settings2 className="w-3.5 h-3.5" /></Button>
                     <Separator orientation="vertical" className="h-7 bg-white/10" />
-                    <Button size="icon" variant="ghost" className="h-7 w-7 text-blue-400 hover:text-blue-300"><Printer className="w-3.5 h-3.5" /></Button>
+                    <Button size="icon" variant="ghost" className="h-7 w-7 text-blue-400 hover:text-blue-300" title="Show printer build volume"><Printer className="w-3.5 h-3.5" /></Button>
                     <Separator orientation="vertical" className="h-7 bg-white/10" />
-                    <Button size="icon" variant="ghost" className="h-7 w-7 text-white/60 hover:text-white" title="Upload reference image"
+                    <Button size="icon" variant="ghost" className="h-7 w-7 text-white/60 hover:text-white" title="Load a reference image to design from"
                       onClick={() => referenceInputRef.current?.click()}>
                       <ImageIcon className="w-3.5 h-3.5" />
                     </Button>
-                    <Button size="icon" variant="ghost" className="h-7 w-7 text-white/60 hover:text-white" title="Generate concept sheet"
+                    <Button size="icon" variant="ghost" className="h-7 w-7 text-white/60 hover:text-white" title="Open the sketch pad to draw an idea"
                       onClick={() => setShowConceptPanel(true)}>
                       <PenTool className="w-3.5 h-3.5" />
                     </Button>
-                    <Button size="icon" variant="ghost" className="h-7 w-7 text-white/60 hover:text-white" title="Extrude image to 3D"
+                    <Button size="icon" variant="ghost" className="h-7 w-7 text-white/60 hover:text-white" title="Turn a flat image into a 3D shape"
                       onClick={handleExtrudeFromImage} disabled={!originalImage && !conceptSketchImage && !referenceImage}>
                       <Box className="w-3.5 h-3.5" />
+                    </Button>
+                    <Button size="icon" variant="ghost" className="h-7 w-7 text-green-400 hover:text-green-300" title="Download 3D model as STL file for printing"
+                      onClick={handleExportSTL} disabled={!protoProject}>
+                      <FileDown className="w-3.5 h-3.5" />
+                    </Button>
+                    <Button size="icon" variant="ghost" className="h-7 w-7 text-purple-400 hover:text-purple-300" title="Download 3D model as GLB file"
+                      onClick={handleExportGLB} disabled={!protoProject}>
+                      <Download className="w-3.5 h-3.5" />
+                    </Button>
+                    <Button size="icon" variant="ghost" className="h-7 w-7 text-orange-400 hover:text-orange-300" title="View this 3D model in augmented reality on your phone"
+                      onClick={handleViewInAR} disabled={!protoProject}>
+                      <Smartphone className="w-3.5 h-3.5" />
                     </Button>
                     {referenceImage && (
                       <div className="flex items-center gap-1">
@@ -1783,7 +2355,7 @@ export default function App() {
                 <div className="flex flex-wrap gap-1.5 mt-2">
                   <p className="text-[9px] text-white/30 mt-0.5 pr-1">Templates:</p>
                   {['Product QR', 'Serial Number', 'Warning Decal', 'Logo Sticker', 'Address Label', 'Parts Tag'].map(p => (
-                    <button key={p} onClick={() => setLabelPrompt(p)} className="text-[9px] font-bold uppercase tracking-widest px-2 py-1 glass-panel border-white/10 text-white/60 hover:border-orange-500 hover:text-orange-400 transition-colors">{p}</button>
+                    <button key={p} onClick={() => setLabelPrompt(p)} title={`Fill in the prompt with "${p}" so you can generate it quickly`} className="text-[9px] font-bold uppercase tracking-widest px-2 py-1 glass-panel border-white/10 text-white/60 hover:border-orange-500 hover:text-orange-400 transition-colors">{p}</button>
                   ))}
                 </div>
               </div>
@@ -1795,13 +2367,13 @@ export default function App() {
             {/* Tab bar */}
             <div className="h-9 px-3 flex items-center gap-1 border-b border-white/5 overflow-x-auto">
               {[
-                { id: '3d', label: '3D Workspace', icon: Box, ready: true },
-                { id: 'bom', label: 'Bill of Materials', icon: ListTodo, ready: !!protoProject },
-                { id: 'fabrication', label: 'Design Files', icon: FileCode, ready: !!protoProject },
-                { id: 'code', label: 'Control Code', icon: Terminal, ready: !!protoProject },
-                { id: 'assembly', label: 'Assembly', icon: ClipboardList, ready: !!(protoProject && protoProject.assemblySteps.length > 0) },
+                { id: '3d', label: '3D Workspace', icon: Box, ready: true, tip: 'View and rotate the 3D model' },
+                { id: 'bom', label: 'Bill of Materials', icon: ListTodo, ready: !!protoProject, tip: 'List of all parts needed and where to buy them' },
+                { id: 'fabrication', label: 'Design Files', icon: FileCode, ready: !!protoProject, tip: 'SVG files, wiring diagrams, and technical drawings' },
+                { id: 'code', label: 'Control Code', icon: Terminal, ready: !!protoProject, tip: 'Machine-readable code for 3D printing or laser cutting' },
+                { id: 'assembly', label: 'Assembly', icon: ClipboardList, ready: !!(protoProject && protoProject.assemblySteps.length > 0), tip: 'Step-by-step instructions for putting it together' },
               ].map(tab => (
-                <button key={tab.id} onClick={() => tab.ready && setActiveOutputTab(tab.id)}
+                <button key={tab.id} onClick={() => tab.ready && setActiveOutputTab(tab.id)} title={tab.tip}
                   className={`flex items-center gap-1.5 px-3 py-1.5 text-[9px] font-bold uppercase tracking-widest rounded-t transition-all whitespace-nowrap
                     ${activeOutputTab === tab.id ? 'bg-white/10 text-blue-400 border-b-2 border-blue-400' : tab.ready ? 'text-white/40 hover:text-white/60 hover:bg-white/5' : 'text-white/15 cursor-not-allowed'}`}>
                   <tab.icon className="w-3 h-3" />
@@ -1811,8 +2383,8 @@ export default function App() {
               ))}
               <div className="flex-1" />
               {protoProject && (
-                <Button size="sm" className="h-6 text-[9px] bg-blue-600 hover:bg-blue-500 text-white">
-                  <ShoppingCart className="w-3 h-3 mr-1" /> Export All
+                <Button size="sm" className="h-6 text-[9px] bg-blue-600 hover:bg-blue-500 text-white" onClick={handleExportAll} title="Download everything as one organized document">
+                  <FileDown className="w-3 h-3 mr-1" /> Export All
                 </Button>
               )}
             </div>
@@ -1829,11 +2401,12 @@ export default function App() {
                         </Badge>
                       )}
                       <Button size="sm" variant={bomSortMode === 'fastest' ? 'default' : 'outline'} className={`h-5 text-[8px] ${bomSortMode === 'fastest' ? 'bg-blue-600' : 'bg-white/5 border-white/10 text-white/60'}`}
-                        onClick={() => setBomSortMode(bomSortMode === 'fastest' ? 'none' : 'fastest')}>FASTEST</Button>
+                        onClick={() => setBomSortMode(bomSortMode === 'fastest' ? 'none' : 'fastest')} title="Sort parts by fastest delivery time">FASTEST</Button>
                       <Button size="sm" variant={bomSortMode === 'cheapest' ? 'default' : 'outline'} className={`h-5 text-[8px] ${bomSortMode === 'cheapest' ? 'bg-blue-600' : 'bg-white/5 border-white/10 text-white/60'}`}
-                        onClick={() => setBomSortMode(bomSortMode === 'cheapest' ? 'none' : 'cheapest')}>CHEAPEST</Button>
+                        onClick={() => setBomSortMode(bomSortMode === 'cheapest' ? 'none' : 'cheapest')} title="Sort parts by lowest price first">CHEAPEST</Button>
                       {shoppingList.size > 0 && (
                         <Button size="sm" variant="outline" className="h-5 text-[8px] bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20"
+                          title="Copy your shopping list to the clipboard so you can paste it somewhere"
                           onClick={() => {
                             const items = sortedParts.filter(p => shoppingList.has(p.id));
                             const text = `SUBSTRATA Shopping List\n${'='.repeat(40)}\n${items.map(p => `[ ] ${p.name} — $${p.price.toFixed(2)} (${p.source})\n    ${p.specs}\n    ${p.url || 'No link'}`).join('\n\n')}\n\nTotal: $${items.reduce((s, p) => s + p.price, 0).toFixed(2)}`;
@@ -1940,10 +2513,68 @@ export default function App() {
                     <div className="flex-1 overflow-auto p-3">
                       {activeDesignFileTab === 'svg' && (
                         protoProject?.svgDesign ? (
-                          <div className="flex flex-col items-center gap-3">
-                            <div className="bg-white rounded-lg p-4 shadow-lg max-w-full overflow-auto"
-                              dangerouslySetInnerHTML={{ __html: sanitizeSvg(protoProject.svgDesign) }} />
-                            <p className="text-[9px] text-white/30 uppercase tracking-widest">Laser-Cut SVG Profile — rendered from generated markup</p>
+                          <div className="space-y-4">
+                            <p className="text-[9px] text-red-400/60 uppercase tracking-widest font-bold">Laser-Cut SVG Parts</p>
+                            {(() => {
+                              // Split on <!--PART_BREAK--> to get individual part SVGs
+                              const parts = protoProject.svgDesign.split(/<!--\s*PART_BREAK\s*-->/).map(s => s.trim()).filter(Boolean);
+                              if (parts.length === 0) return (
+                                <div className="bg-white rounded-lg p-4 shadow-lg max-w-full overflow-auto"
+                                  dangerouslySetInnerHTML={{ __html: sanitizeSvg(protoProject.svgDesign) }} />
+                              );
+
+                              return (
+                                <div className="grid grid-cols-1 gap-4">
+                                  {parts.map((partSvg, idx) => {
+                                    // Extract title from <title> element
+                                    const titleMatch = partSvg.match(/<title>([^<]+)<\/title>/);
+                                    const partName = titleMatch ? titleMatch[1] : `Part ${idx + 1}`;
+                                    return (
+                                      <div key={idx} className="glass-panel border border-white/10 rounded-lg overflow-hidden">
+                                        <div className="flex items-center justify-between px-3 py-1.5 border-b border-white/10 bg-white/5">
+                                          <span className="text-[10px] font-bold text-white/70 uppercase tracking-wider">{partName}</span>
+                                          <div className="flex gap-1">
+                                            <Button size="sm" variant="ghost" className="h-6 text-[9px] text-white/40 hover:text-white"
+                                              onClick={() => { navigator.clipboard.writeText(partSvg); toast.success(`Copied ${partName} SVG`); }}>
+                                              <Copy className="w-3 h-3 mr-1" /> Copy
+                                            </Button>
+                                            <Button size="sm" variant="ghost" className="h-6 text-[9px] text-red-400/60 hover:text-red-300"
+                                              onClick={() => {
+                                                const blob = new Blob([partSvg], { type: 'image/svg+xml' });
+                                                const url = URL.createObjectURL(blob);
+                                                const a = document.createElement('a');
+                                                a.href = url;
+                                                a.download = `${partName.replace(/[^a-zA-Z0-9]/g, '_')}.svg`;
+                                                a.click();
+                                                URL.revokeObjectURL(url);
+                                                toast.success(`Downloaded ${partName}.svg`);
+                                              }}>
+                                              <FileDown className="w-3 h-3 mr-1" /> Download
+                                            </Button>
+                                          </div>
+                                        </div>
+                                        <div className="bg-white rounded-b-lg p-4 flex items-center justify-center overflow-auto"
+                                          dangerouslySetInnerHTML={{ __html: sanitizeSvg(partSvg) }} />
+                                      </div>
+                                    );
+                                  })}
+                                  {/* Download All Parts as single file */}
+                                  <Button size="sm" variant="ghost" className="h-7 text-[9px] text-red-400/60 hover:text-red-300 self-start"
+                                    onClick={() => {
+                                      const blob = new Blob([protoProject.svgDesign], { type: 'image/svg+xml' });
+                                      const url = URL.createObjectURL(blob);
+                                      const a = document.createElement('a');
+                                      a.href = url;
+                                      a.download = `${(protoProject.name || 'parts').replace(/[^a-zA-Z0-9]/g, '_')}_all_parts.svg`;
+                                      a.click();
+                                      URL.revokeObjectURL(url);
+                                      toast.success('All SVG parts exported');
+                                    }}>
+                                    <FileDown className="w-3 h-3 mr-1" /> Download All SVGs
+                                  </Button>
+                                </div>
+                              );
+                            })()}
                           </div>
                         ) : (
                           <p className="text-center py-8 text-white/20 text-xs font-mono tracking-widest">GENERATE A BLUEPRINT TO SEE SVG DESIGNS</p>
@@ -1992,17 +2623,61 @@ export default function App() {
                       )}
                       {activeDesignFileTab === 'wiring' && (
                         protoProject?.wiringDiagram ? (
-                          <div className="space-y-2">
+                          <div className="space-y-3">
                             <p className="text-[9px] text-yellow-400/60 uppercase tracking-widest font-bold mb-2">Wiring Diagram</p>
-                            {protoProject.wiringDiagram.split('\n').filter(l => l.trim()).map((line, i) => {
-                              const isHeader = line.startsWith('#') || line.startsWith('==') || line.toUpperCase() === line.trim();
-                              const isConnection = line.includes('→') || line.includes('->') || line.includes('-->');
+                            {/* Render Mermaid diagram if present */}
+                            {(() => {
+                              const raw = protoProject.wiringDiagram;
+                              // Split on ---TEXT--- to get mermaid part and text part
+                              const textMarker = raw.indexOf('---TEXT---');
+                              const mermaidPart = textMarker >= 0 ? raw.substring(0, textMarker).trim() : '';
+                              const textPart = textMarker >= 0 ? raw.substring(textMarker + 9).trim() : raw;
+                              // Check if there's a mermaid graph definition
+                              const hasMermaid = /^\s*(graph|flowchart|sequenceDiagram|classDiagram)\s/m.test(mermaidPart || raw);
+                              const mermaidCode = hasMermaid ? (mermaidPart || raw.split('---TEXT---')[0]).trim() : '';
+                              const textLines = (textPart || (!hasMermaid ? raw : '')).split('\n').filter(l => l.trim());
+
                               return (
-                                <div key={i} className={`text-xs font-mono px-2 py-0.5 rounded ${isHeader ? 'text-yellow-300 font-bold text-[10px] mt-2 border-b border-yellow-500/20 pb-1' : isConnection ? 'text-green-300 bg-green-900/20 border-l-2 border-green-500/40 pl-3' : 'text-white/50'}`}>
-                                  {line}
-                                </div>
+                                <>
+                                  {mermaidCode && (
+                                    <div className="bg-black/40 rounded-lg border border-yellow-500/20 p-4 overflow-auto">
+                                      <WiringMermaid code={mermaidCode} />
+                                    </div>
+                                  )}
+                                  {textLines.length > 0 && (
+                                    <div className="space-y-1 mt-2">
+                                      <p className="text-[8px] text-white/30 uppercase tracking-widest font-bold">Pin-by-Pin Connections</p>
+                                      {textLines.map((line, i) => {
+                                        const isHeader = line.startsWith('#') || line.startsWith('==') || (line.toUpperCase() === line.trim() && line.length > 3);
+                                        const isConnection = line.includes('→') || line.includes('->') || line.includes('-->');
+                                        return (
+                                          <div key={i} className={`text-xs font-mono px-2 py-0.5 rounded ${isHeader ? 'text-yellow-300 font-bold text-[10px] mt-2 border-b border-yellow-500/20 pb-1' : isConnection ? 'text-green-300 bg-green-900/20 border-l-2 border-green-500/40 pl-3' : 'text-white/50'}`}>
+                                            {line}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                  {/* Download wiring as SVG */}
+                                  {mermaidCode && (
+                                    <Button size="sm" variant="ghost" className="h-7 text-[9px] text-yellow-400/60 hover:text-yellow-300 mt-2"
+                                      onClick={() => {
+                                        const svgEl = document.querySelector('.wiring-mermaid-container svg');
+                                        if (svgEl) {
+                                          const blob = new Blob([svgEl.outerHTML], { type: 'image/svg+xml' });
+                                          const url = URL.createObjectURL(blob);
+                                          const a = document.createElement('a');
+                                          a.href = url; a.download = 'wiring_diagram.svg'; a.click();
+                                          URL.revokeObjectURL(url);
+                                          toast.success('Wiring diagram SVG exported');
+                                        }
+                                      }}>
+                                      <FileDown className="w-3 h-3 mr-1" /> Export Wiring SVG
+                                    </Button>
+                                  )}
+                                </>
                               );
-                            })}
+                            })()}
                           </div>
                         ) : (
                           <p className="text-center py-8 text-white/20 text-xs font-mono tracking-widest">GENERATE A BLUEPRINT TO SEE WIRING</p>
@@ -2040,7 +2715,7 @@ export default function App() {
         </div>
 
         {/* Props panel toggle */}
-        <button onClick={() => setPropsCollapsed(!propsCollapsed)}
+        <button onClick={() => setPropsCollapsed(!propsCollapsed)} title="Show or hide the settings panel on the right"
           className="shrink-0 w-5 flex items-center justify-center border-l border-white/5 bg-black/20 hover:bg-white/5 transition-colors text-white/30 hover:text-white/60">
           <PanelRight className={`w-3 h-3 transition-transform ${propsCollapsed ? 'rotate-180' : ''}`} />
         </button>
@@ -2084,9 +2759,9 @@ export default function App() {
                   <section className="space-y-2">
                     <h3 className="text-[9px] font-black uppercase tracking-widest text-white/40 px-1 flex items-center gap-1.5"><Scissors className="w-3 h-3" /> Canvas Editing</h3>
                     <div className="p-2 glass-panel border-white/10 flex justify-around">
-                      <Button variant="ghost" size="icon" className="h-7 w-7 hover:bg-white/10 text-white/60 hover:text-laser-accent" onClick={() => setProcOptions(p => ({...p, rotate: (p.rotate + 90) % 360}))} title="Rotate"><RotateCw className="w-3.5 h-3.5" /></Button>
-                      <Button variant="ghost" size="icon" className={`h-7 w-7 hover:bg-white/10 ${procOptions.flipH ? 'bg-laser-accent/20 text-laser-accent' : 'text-white/60'}`} onClick={() => setProcOptions(p => ({...p, flipH: !p.flipH}))} title="Flip H"><FlipHorizontal className="w-3.5 h-3.5" /></Button>
-                      <Button variant="ghost" size="icon" className={`h-7 w-7 hover:bg-white/10 ${procOptions.flipV ? 'bg-laser-accent/20 text-laser-accent' : 'text-white/60'}`} onClick={() => setProcOptions(p => ({...p, flipV: !p.flipV}))} title="Flip V"><FlipVertical className="w-3.5 h-3.5" /></Button>
+                      <Button variant="ghost" size="icon" className="h-7 w-7 hover:bg-white/10 text-white/60 hover:text-laser-accent" onClick={() => setProcOptions(p => ({...p, rotate: (p.rotate + 90) % 360}))} title="Spin the image 90 degrees"><RotateCw className="w-3.5 h-3.5" /></Button>
+                      <Button variant="ghost" size="icon" className={`h-7 w-7 hover:bg-white/10 ${procOptions.flipH ? 'bg-laser-accent/20 text-laser-accent' : 'text-white/60'}`} onClick={() => setProcOptions(p => ({...p, flipH: !p.flipH}))} title="Mirror the image left to right"><FlipHorizontal className="w-3.5 h-3.5" /></Button>
+                      <Button variant="ghost" size="icon" className={`h-7 w-7 hover:bg-white/10 ${procOptions.flipV ? 'bg-laser-accent/20 text-laser-accent' : 'text-white/60'}`} onClick={() => setProcOptions(p => ({...p, flipV: !p.flipV}))} title="Mirror the image top to bottom"><FlipVertical className="w-3.5 h-3.5" /></Button>
                     </div>
                   </section>
 
@@ -2096,22 +2771,22 @@ export default function App() {
                     <div className="p-2 glass-panel border-white/10 space-y-2">
                       <div className="grid grid-cols-2 gap-1.5">
                         {[
-                          { name: 'Draft', opts: { brightness: 0, contrast: 0.2, threshold: 128, dither: false, edgeDetection: false } },
-                          { name: 'Fine', opts: { brightness: -0.1, contrast: 0.3, threshold: 120, dither: true, edgeDetection: false } },
-                          { name: 'Contrast', opts: { brightness: 0, contrast: 0.8, threshold: 128, dither: true, edgeDetection: false } },
-                          { name: 'Stencil', opts: { brightness: 0, contrast: 0.5, threshold: 150, dither: false, edgeDetection: true } },
+                          { name: 'Draft', tip: 'Quick low-detail engrave for testing', opts: { brightness: 0, contrast: 0.2, threshold: 128, dither: false, edgeDetection: false } },
+                          { name: 'Fine', tip: 'Detailed engrave with smooth shading', opts: { brightness: -0.1, contrast: 0.3, threshold: 120, dither: true, edgeDetection: false } },
+                          { name: 'Contrast', tip: 'High contrast black and white engrave', opts: { brightness: 0, contrast: 0.8, threshold: 128, dither: true, edgeDetection: false } },
+                          { name: 'Stencil', tip: 'Outline only for cutting shapes', opts: { brightness: 0, contrast: 0.5, threshold: 150, dither: false, edgeDetection: true } },
                         ].map(style => (
                           <Button key={style.name} variant="outline" className="h-6 text-[8px] font-bold uppercase border-white/5 bg-black/20 hover:border-laser-accent/50"
-                            onClick={() => setProcOptions(p => ({...p, ...style.opts}))}>{style.name}</Button>
+                            onClick={() => setProcOptions(p => ({...p, ...style.opts}))} title={style.tip}>{style.name}</Button>
                         ))}
                       </div>
                       {/* Toggles */}
                       {[
-                        { label: 'Dithering', key: 'dither', color: 'laser-accent' },
-                        { label: 'Invert', key: 'invert', color: 'laser-accent' },
-                        { label: 'Cut Mode', key: 'edgeDetection', color: 'cyan-500' },
+                        { label: 'Dithering', key: 'dither', color: 'laser-accent', tip: 'Add dots to simulate shading instead of solid black and white' },
+                        { label: 'Invert', key: 'invert', color: 'laser-accent', tip: 'Swap black and white so the laser burns the opposite areas' },
+                        { label: 'Cut Mode', key: 'edgeDetection', color: 'cyan-500', tip: 'Detect edges only so the laser cuts outlines instead of engraving' },
                       ].map(t => (
-                        <div key={t.key} className="flex items-center justify-between">
+                        <div key={t.key} className="flex items-center justify-between" title={t.tip}>
                           <Label className={`text-[10px] font-medium ${t.key === 'edgeDetection' ? 'text-cyan-400 font-bold' : 'text-white/70'}`}>{t.label}</Label>
                           <div className={`w-8 h-4 rounded-full transition-colors cursor-pointer flex items-center p-0.5 ${(procOptions as any)[t.key] ? `bg-${t.color}` : 'bg-white/10'}`}
                             onClick={() => setProcOptions(p => ({...p, [t.key]: !(p as any)[t.key]}))}>
@@ -2220,12 +2895,12 @@ export default function App() {
                         </div>
                       </div>
                       <Button variant="outline" size="sm" className="w-full h-7 text-[9px] border-red-500/30 text-red-400 hover:bg-red-500/10 font-bold uppercase"
-                        onClick={handleGenerateSilhouette} disabled={!labelDesignImage}>
+                        onClick={handleGenerateSilhouette} disabled={!labelDesignImage} title="Create a cut line around the edges of the label design">
                         <Scissors className="w-3 h-3 mr-1" /> Generate Edge Outline
                       </Button>
                       {labelSilhouetteSvg && (
                         <Button variant="outline" size="sm" className="w-full h-7 text-[9px] border-white/10 text-white/60 hover:bg-white/10 font-bold uppercase"
-                          onClick={handleExportSilhouetteSvg}>
+                          onClick={handleExportSilhouetteSvg} title="Download the cut line as an SVG file for the laser">
                           <Download className="w-3 h-3 mr-1" /> Export Cut SVG
                         </Button>
                       )}
@@ -2242,7 +2917,7 @@ export default function App() {
                       </div>
                       <p className="text-[9px] font-black leading-tight mb-0.5">{MUNBYN_ITPP130B.name}</p>
                       <p className="text-[7px] font-bold opacity-70 mb-1.5">{MUNBYN_ITPP130B.dpi} DPI • {MUNBYN_ITPP130B.maxPrintWidth}mm • Direct Thermal</p>
-                      <Button className="w-full bg-black text-white hover:bg-black/80 font-bold h-6 text-[8px]" onClick={handleExportLabel} disabled={!labelDesignImage}>
+                      <Button className="w-full bg-black text-white hover:bg-black/80 font-bold h-6 text-[8px]" onClick={handleExportLabel} disabled={!labelDesignImage} title="Download a file ready to send to the label printer">
                         <Download className="w-3 h-3 mr-1" /> Export Print-Ready
                       </Button>
                     </div>
@@ -2282,7 +2957,7 @@ export default function App() {
                       </div>
                       <p className="text-[9px] font-black leading-tight mb-0.5">Generative Strength Analysis</p>
                       <p className="text-[7px] font-bold opacity-70 mb-1.5">Optimize for {designStyle} structures.</p>
-                      <Button className="w-full bg-black text-white hover:bg-black/80 font-bold h-6 text-[8px]">Run Simulation</Button>
+                      <Button className="w-full bg-black text-white hover:bg-black/80 font-bold h-6 text-[8px]" title="Test how strong the 3D design is before printing it">Run Simulation</Button>
                     </div>
                   </Card>
 
@@ -2438,7 +3113,7 @@ function ConsultantInterface({
                    if (!isMuted) cancelSpeech();
                    onToggleMute();
                 }}
-                title={isMuted ? 'Unmute' : 'Mute'}
+                title={isMuted ? 'Turn the voice back on so the AI talks out loud' : 'Stop the AI from talking out loud'}
             >
                 {isMuted ? <MicOff className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
             </Button>
@@ -2447,13 +3122,29 @@ function ConsultantInterface({
       <div className="flex-1 overflow-y-auto p-3 scrollbar-thin scrollbar-thumb-white/10">
         <div className="space-y-3">
           {messages.map((m, i) => (
-            <div key={i} className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
-              <div className={`max-w-[90%] rounded-xl px-3 py-2 text-xs leading-relaxed ${
+            <div key={i} className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'} group/msg`}>
+              <div className={`max-w-[90%] rounded-xl px-3 py-2 text-xs leading-relaxed relative ${
                 m.role === 'user' 
                   ? 'bg-laser-accent text-black font-medium rounded-tr-none shadow-md' 
                   : 'bg-white/5 text-white border border-white/10 rounded-tl-none backdrop-blur-sm shadow-sm'
               }`}>
                 {m.content}
+                {/* Restart from here button — visible on hover for all messages after initial */}
+                {i > 0 && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      // Truncate messages to this point and allow re-entry
+                      setMessages(messages.slice(0, i + 1));
+                      if (m.role === 'user') setInput(m.content);
+                      toast.info(`Restarted from message ${i + 1}`);
+                    }}
+                    className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-black/80 border border-white/20 items-center justify-center text-white/50 hover:text-laser-accent hover:border-laser-accent transition-colors hidden group-hover/msg:flex"
+                    title="Go back to this point in the conversation and continue from here"
+                  >
+                    <CornerUpLeft className="w-2.5 h-2.5" />
+                  </button>
+                )}
               </div>
               {m.files && m.files.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mt-1.5 max-w-[90%]">
@@ -2502,6 +3193,7 @@ function ConsultantInterface({
             <div 
                 className={`w-8 h-4 rounded-full transition-colors cursor-pointer flex items-center p-0.5 ${useDeepThinking ? 'bg-laser-accent' : 'bg-white/10'}`}
                 onClick={() => setUseDeepThinking(!useDeepThinking)}
+                title="When on, the AI thinks longer and gives more detailed answers"
             >
                 <motion.div 
                 animate={{ x: useDeepThinking ? 16 : 0 }} 
@@ -2517,7 +3209,7 @@ function ConsultantInterface({
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
             />
-            <Button className="accent-btn h-9 px-3 shrink-0 shadow-lg shadow-cyan-500/20 text-[10px]" onClick={sendMessage}>
+            <Button className="accent-btn h-9 px-3 shrink-0 shadow-lg shadow-cyan-500/20 text-[10px]" onClick={sendMessage} title="Send your message to the AI advisor">
             <Zap className="w-3 h-3" />
             </Button>
         </div>
@@ -2526,6 +3218,7 @@ function ConsultantInterface({
           className="w-full h-8 text-[10px] uppercase tracking-widest font-bold bg-gradient-to-r from-blue-600/20 to-purple-600/20 border-blue-500/30 text-blue-300 hover:from-blue-600/30 hover:to-purple-600/30 hover:text-blue-200"
           onClick={handleManualBuild}
           disabled={messages.length < 2}
+          title="Take the conversation so far and generate a full 3D design from it"
         >
           <Wrench className="w-3 h-3 mr-1.5" /> Build Blueprint from Discussion
         </Button>
@@ -2534,9 +3227,73 @@ function ConsultantInterface({
   );
 }
 
-function MaintenanceDashboard() {
+function MaintenanceDashboard({ selectedPrinter, selectedLaser, onChangePrinter, onChangeLaser }: {
+  selectedPrinter: string; selectedLaser: string;
+  onChangePrinter: (v: string) => void; onChangeLaser: (v: string) => void;
+}) {
+  const [activeTab, setActiveTab] = useState<'laser' | 'printer'>('laser');
+  const laser = LASER_DATABASE[selectedLaser];
+  const printer = PRINTER_DATABASE[selectedPrinter];
+  const machine = activeTab === 'laser' ? laser : printer;
+  const machineName = machine?.name || (activeTab === 'laser' ? selectedLaser : selectedPrinter);
+  const isLaser = activeTab === 'laser';
+  const isCO2 = laser?.type?.includes('CO2');
+  const isDiode = laser?.type?.includes('Diode');
+  const isFDM = printer?.type?.includes('FDM');
+  const isResin = printer?.type?.includes('Resin') || printer?.type?.includes('MSLA');
+
   return (
-    <div className="space-y-6 animate-in fade-in duration-500">
+    <div className="space-y-5 animate-in fade-in duration-500">
+      {/* Machine Selector */}
+      <div className="space-y-3">
+        <div className="flex gap-1 bg-white/5 rounded-lg p-0.5 border border-white/5">
+          <button onClick={() => setActiveTab('laser')}
+            className={`flex-1 px-3 py-1.5 text-[9px] font-black uppercase tracking-widest rounded-md transition-all ${activeTab === 'laser' ? 'bg-laser-accent text-black' : 'text-white/40 hover:text-white/60'}`}>
+            Laser Engraver
+          </button>
+          <button onClick={() => setActiveTab('printer')}
+            className={`flex-1 px-3 py-1.5 text-[9px] font-black uppercase tracking-widest rounded-md transition-all ${activeTab === 'printer' ? 'bg-blue-600 text-white' : 'text-white/40 hover:text-white/60'}`}>
+            3D Printer
+          </button>
+        </div>
+        <select className="w-full bg-black/40 border border-white/10 text-xs text-white/80 rounded-lg px-3 py-2 outline-none focus:border-laser-accent/50"
+          value={isLaser ? selectedLaser : selectedPrinter}
+          onChange={e => isLaser ? onChangeLaser(e.target.value) : onChangePrinter(e.target.value)}>
+          {Object.keys(isLaser ? LASER_DATABASE : PRINTER_DATABASE).map(k => (
+            <option key={k} value={k}>{(isLaser ? LASER_DATABASE : PRINTER_DATABASE)[k].name}</option>
+          ))}
+        </select>
+        {/* Machine specs card */}
+        <div className="glass-panel border-white/10 p-3 rounded-xl">
+          <div className="flex items-center gap-2 mb-2">
+            {isLaser ? <Zap className="w-4 h-4 text-laser-accent" /> : <Printer className="w-4 h-4 text-blue-400" />}
+            <div>
+              <p className="text-sm font-bold text-white/90">{machineName}</p>
+              <p className="text-[9px] text-white/40 uppercase font-bold">{isLaser ? laser?.type : printer?.type}</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-[10px]">
+            {isLaser ? (<>
+              <div className="bg-white/5 p-1.5 rounded border border-white/5"><p className="text-white/40 text-[8px] uppercase">Work Area</p><p className="text-white/80 font-bold">{laser?.workArea}</p></div>
+              <div className="bg-white/5 p-1.5 rounded border border-white/5"><p className="text-white/40 text-[8px] uppercase">Power</p><p className="text-white/80 font-bold">{laser?.power}</p></div>
+              <div className="bg-white/5 p-1.5 rounded border border-white/5"><p className="text-white/40 text-[8px] uppercase">Wavelength</p><p className="text-white/80 font-bold">{laser?.wavelength}</p></div>
+              <div className="bg-white/5 p-1.5 rounded border border-white/5"><p className="text-white/40 text-[8px] uppercase">Software</p><p className="text-white/80 font-bold">{laser?.software}</p></div>
+            </>) : (<>
+              <div className="bg-white/5 p-1.5 rounded border border-white/5"><p className="text-white/40 text-[8px] uppercase">Build Vol.</p><p className="text-white/80 font-bold">{printer?.buildVolume}</p></div>
+              <div className="bg-white/5 p-1.5 rounded border border-white/5"><p className="text-white/40 text-[8px] uppercase">Layer Height</p><p className="text-white/80 font-bold">{printer?.layerHeight}</p></div>
+              <div className="bg-white/5 p-1.5 rounded border border-white/5"><p className="text-white/40 text-[8px] uppercase">Nozzle</p><p className="text-white/80 font-bold">{printer?.nozzle}</p></div>
+              <div className="bg-white/5 p-1.5 rounded border border-white/5"><p className="text-white/40 text-[8px] uppercase">Connectivity</p><p className="text-white/80 font-bold">{printer?.connectivity}</p></div>
+            </>)}
+          </div>
+          <div className="mt-2 flex flex-wrap gap-1">
+            {(isLaser ? laser?.materials : printer?.materials)?.map(m => (
+              <span key={m} className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-white/5 text-white/50 border border-white/5">{m}</span>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Status Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
         <Card className="glass-panel border-white/10 overflow-hidden">
           <div className="p-2.5 space-y-2">
@@ -2550,14 +3307,16 @@ function MaintenanceDashboard() {
               </div>
             </div>
             <div className="space-y-1">
-              <div className="flex justify-between text-[10px]">
-                <span className="text-white/60">Goggles</span>
-                <span className="text-green-400 font-bold">VERIFIED</span>
-              </div>
-              <div className="flex justify-between text-[10px]">
-                <span className="text-white/60">Exhaust</span>
-                <span className="text-green-400 font-bold">ACTIVE</span>
-              </div>
+              {isLaser ? (<>
+                <div className="flex justify-between text-[10px]"><span className="text-white/60">Goggles ({isDiode ? '445nm OD5+' : isCO2 ? '10600nm OD6+' : 'Rated'})</span><span className="text-green-400 font-bold">VERIFIED</span></div>
+                <div className="flex justify-between text-[10px]"><span className="text-white/60">Exhaust / Ventilation</span><span className="text-green-400 font-bold">ACTIVE</span></div>
+                {isCO2 && <div className="flex justify-between text-[10px]"><span className="text-white/60">Water Cooling Loop</span><span className="text-green-400 font-bold">OK</span></div>}
+                <div className="flex justify-between text-[10px]"><span className="text-white/60">Fire Extinguisher Nearby</span><span className="text-yellow-400 font-bold">CHECK</span></div>
+              </>) : (<>
+                <div className="flex justify-between text-[10px]"><span className="text-white/60">Ventilation ({isResin ? 'Resin Fumes' : 'ABS/ASA Fumes'})</span><span className="text-green-400 font-bold">OK</span></div>
+                {isResin && <div className="flex justify-between text-[10px]"><span className="text-white/60">Nitrile Gloves</span><span className="text-green-400 font-bold">VERIFIED</span></div>}
+                <div className="flex justify-between text-[10px]"><span className="text-white/60">Build Plate Adhesion</span><span className="text-green-400 font-bold">GOOD</span></div>
+              </>)}
             </div>
           </div>
         </Card>
@@ -2576,13 +3335,35 @@ function MaintenanceDashboard() {
             <div className="space-y-1.5 pt-0.5">
               <div className="space-y-0.5">
                 <div className="flex justify-between text-[9px] uppercase font-bold text-white/40 px-0.5">
-                  <span>Lens</span>
+                  <span>{isLaser ? 'Lens' : isResin ? 'FEP Film' : 'Nozzle'}</span>
                   <span>75%</span>
                 </div>
                 <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden">
                   <div className="h-full bg-laser-accent w-3/4" />
                 </div>
               </div>
+              {isLaser && (
+                <div className="space-y-0.5">
+                  <div className="flex justify-between text-[9px] uppercase font-bold text-white/40 px-0.5">
+                    <span>{isCO2 ? 'Mirrors' : 'Focus Module'}</span>
+                    <span>90%</span>
+                  </div>
+                  <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden">
+                    <div className="h-full bg-green-400 w-[90%]" />
+                  </div>
+                </div>
+              )}
+              {!isLaser && (
+                <div className="space-y-0.5">
+                  <div className="flex justify-between text-[9px] uppercase font-bold text-white/40 px-0.5">
+                    <span>{isResin ? 'UV LCD Screen' : 'Belts/Rails'}</span>
+                    <span>85%</span>
+                  </div>
+                  <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden">
+                    <div className="h-full bg-green-400 w-[85%]" />
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </Card>
@@ -2604,7 +3385,7 @@ function MaintenanceDashboard() {
                 <p className="text-sm font-bold text-white/90">98%</p>
               </div>
               <div className="bg-white/5 p-1.5 rounded-lg border border-white/5">
-                <p className="text-[7px] text-white/40 uppercase font-bold">Cuts</p>
+                <p className="text-[7px] text-white/40 uppercase font-bold">{isLaser ? 'Burns' : 'Prints'}</p>
                 <p className="text-sm font-bold text-white/90">142</p>
               </div>
             </div>
@@ -2612,11 +3393,12 @@ function MaintenanceDashboard() {
         </Card>
       </div>
 
+      {/* Troubleshooting */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-4">
           <h3 className="text-base font-semibold tracking-tight text-white/90 flex items-center gap-2">
             <ShieldAlert className="w-4 h-4 text-red-400" />
-            Troubleshooting
+            Troubleshooting — {machineName}
           </h3>
           
           <Accordion className="space-y-3">
@@ -2625,30 +3407,49 @@ function MaintenanceDashboard() {
                 <div className="flex items-center gap-3">
                   <Cpu className="w-4 h-4 text-purple-400" />
                   <div className="text-left">
-                    <p className="text-sm font-bold text-white/90">Link / Discovery</p>
+                    <p className="text-sm font-bold text-white/90">{isLaser ? 'Link / Discovery' : 'Connection / Slicing'}</p>
                     <p className="text-[9px] text-white/40 uppercase font-bold tracking-wider leading-none mt-1">Difficulty: Low</p>
                   </div>
                 </div>
               </AccordionTrigger>
               <AccordionContent className="pb-4 text-white/60 text-xs space-y-3">
-                 <div className="space-y-2">
-                   <p className="font-bold text-white/80">1. Driver Check:</p>
-                   <ul className="list-disc pl-5 space-y-1">
-                     <li>Ensure CH340 or CP210x drivers are installed. For ACMER S1 on Windows, check "Ports (COM & LPT)" in Device Manager.</li>
-                     <li>On Mac, check `/dev/cu.usbserial-*` using the `ls /dev/cu.*` command in terminal.</li>
-                   </ul>
-                 </div>
-                 <div className="space-y-2">
-                   <p className="font-bold text-white/80">2. Cable Path:</p>
-                   <ul className="list-disc pl-5 space-y-1">
-                     <li>Avoid USB hubs. Low-power hubs cause serial dropout during high-speed moves.</li>
-                     <li>Replace the standard 1.5m cable with a shielded one if EMF interference is suspected from the laser module.</li>
-                   </ul>
-                 </div>
-                 <div className="bg-laser-accent/5 border border-laser-accent/10 p-4 rounded-lg flex gap-3">
+                {isLaser ? (<>
+                  <div className="space-y-2">
+                    <p className="font-bold text-white/80">1. Driver Check:</p>
+                    <ul className="list-disc pl-5 space-y-1">
+                      <li>Ensure CH340 or CP210x serial drivers are installed. For {machineName} on Windows, check "Ports (COM & LPT)" in Device Manager.</li>
+                      <li>On Mac, check <code className="text-laser-accent bg-laser-accent/10 px-1 rounded">/dev/cu.usbserial-*</code> using the <code className="text-laser-accent bg-laser-accent/10 px-1 rounded">ls /dev/cu.*</code> command.</li>
+                    </ul>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="font-bold text-white/80">2. Cable Path:</p>
+                    <ul className="list-disc pl-5 space-y-1">
+                      <li>Avoid USB hubs. Low-power hubs cause serial dropout during high-speed moves.</li>
+                      <li>Replace the standard cable with a shielded one if EMF interference is suspected from the laser module.</li>
+                    </ul>
+                  </div>
+                  <div className="bg-laser-accent/5 border border-laser-accent/10 p-4 rounded-lg flex gap-3">
                     <HelpCircle className="w-5 h-5 text-laser-accent shrink-0" />
-                    <p className="text-xs text-laser-accent/80 italic">Tip: If "Resource Busy" errors occur, close Google Chrome/other browsers as they might attempt to claim the Serial API port.</p>
-                 </div>
+                    <p className="text-xs text-laser-accent/80 italic">Tip: If "Resource Busy" errors occur, close Google Chrome or other browsers as they may claim the Serial API port. Supported software: {laser?.software || 'LaserGRBL / LightBurn'}.</p>
+                  </div>
+                </>) : (<>
+                  <div className="space-y-2">
+                    <p className="font-bold text-white/80">1. Connection Check:</p>
+                    <ul className="list-disc pl-5 space-y-1">
+                      <li>{machineName} connects via {printer?.connectivity}. Ensure the correct interface is active.</li>
+                      {isFDM && <li>If using Wi-Fi, ensure the printer and computer are on the same network. Try USB/SD as fallback.</li>}
+                      {isResin && <li>USB drives must be FAT32 formatted. Large STL files should be pre-sliced to avoid timeouts.</li>}
+                    </ul>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="font-bold text-white/80">2. Slicer Settings:</p>
+                    <ul className="list-disc pl-5 space-y-1">
+                      <li>Layer height range: {printer?.layerHeight}. Start with 0.2mm for speed, 0.08mm for detail.</li>
+                      {isResin && <li>Use the manufacturer's resin profile. Exposure times vary between standard and ABS-like resins.</li>}
+                      {isFDM && <li>Nozzle: {printer?.nozzle}. Verify nozzle temperature matches filament spec (PLA: 200-215°C, PETG: 230-250°C).</li>}
+                    </ul>
+                  </div>
+                </>)}
               </AccordionContent>
             </AccordionItem>
 
@@ -2657,24 +3458,44 @@ function MaintenanceDashboard() {
                 <div className="flex items-center gap-3">
                   <Wind className="w-4 h-4 text-cyan-400" />
                   <div className="text-left">
-                    <p className="text-sm font-bold text-white/90">Burn Quality</p>
+                    <p className="text-sm font-bold text-white/90">{isLaser ? 'Burn Quality' : 'Print Quality'}</p>
                     <p className="text-[9px] text-white/40 uppercase font-bold tracking-wider leading-none mt-1">Difficulty: Med</p>
                   </div>
                 </div>
               </AccordionTrigger>
               <AccordionContent className="pb-4 text-white/60 text-xs space-y-3">
-                 <div className="space-y-2">
-                   <p className="font-bold text-white/80">1. Focal Point Drift:</p>
-                   <p>The ACMER S1 fixed focus requires the 2mm acrylic measurement sheet. If the laser is too high, the beam "spreads," causing wide, unfocused soot lines instead of sharp engravings.</p>
-                 </div>
-                 <div className="space-y-2">
-                   <p className="font-bold text-white/80">2. Speed vs. Power Ratio:</p>
-                   <p>For hardwoods, use 90% power at 1000mm/min. If scorching occurs on plywood, increase speed to 2000mm/min and use 2 passes instead of 1 high-power pass.</p>
-                 </div>
-                 <div className="bg-blue-500/5 border border-blue-500/10 p-4 rounded-lg flex gap-3">
+                {isLaser ? (<>
+                  <div className="space-y-2">
+                    <p className="font-bold text-white/80">1. Focus Adjustment:</p>
+                    <p>{isDiode ? `${machineName} uses a fixed-focus or adjustable-focus diode. Use the included measurement sheet or spacer to set exact focal distance. If the beam "spreads," the focus is off — you get wide, fuzzy lines instead of sharp ones.`
+                      : `${machineName} is a CO2 laser. Focus the beam using the Z-axis or manual focus jig. A defocused beam wastes power and scorches wide paths.`}</p>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="font-bold text-white/80">2. Speed vs. Power:</p>
+                    <p>For hardwoods on {machineName} ({laser?.power}), start with 80-90% power at moderate speed. If scorching occurs, increase speed and use multiple passes instead of one high-power pass.</p>
+                  </div>
+                  <div className="bg-blue-500/5 border border-blue-500/10 p-4 rounded-lg flex gap-3">
                     <Fan className="w-5 h-5 text-blue-400 shrink-0" />
-                    <p className="text-xs text-blue-400/80 italic">Air Assist: Always use air assist for plywood to prevent edge charring. For engraving on leather, use low air pressure to prevent soot from being driven into the grain.</p>
-                 </div>
+                    <p className="text-xs text-blue-400/80 italic">Air Assist: {isCO2 ? 'CO2 lasers need strong air assist for cutting. Use a compressor (not aquarium pump) for clean edges.' : 'Use air assist for plywood to prevent edge charring. For leather, use low pressure to avoid driving soot into the grain.'}</p>
+                  </div>
+                </>) : (<>
+                  <div className="space-y-2">
+                    <p className="font-bold text-white/80">1. {isResin ? 'Layer Adhesion / Delamination' : 'First Layer Issues'}:</p>
+                    {isResin ? (
+                      <p>If layers separate or the print falls off the build plate, increase bottom exposure time by 5-10s. Ensure the FEP film is clean and tight. Shake the resin bottle before filling.</p>
+                    ) : (
+                      <p>If the first layer doesn&#39;t stick, level the bed and adjust Z-offset. Clean the build surface with IPA. For PLA use 60°C bed temp, PETG use 80°C.</p>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <p className="font-bold text-white/80">2. {isResin ? 'Resin Exposure Tuning' : 'Stringing & Retraction'}:</p>
+                    {isResin ? (
+                      <p>Overexposure causes bloating. Underexposure causes fragile parts. Print a resin calibration test (XP2 validation matrix) to find optimal exposure for your resin brand.</p>
+                    ) : (
+                      <p>If thin strings appear between parts, increase retraction distance (start 1mm for direct drive, 5mm for bowden). Reduce travel temperature by 5-10°C.</p>
+                    )}
+                  </div>
+                </>)}
               </AccordionContent>
             </AccordionItem>
 
@@ -2683,66 +3504,104 @@ function MaintenanceDashboard() {
                 <div className="flex items-center gap-3">
                   <ShieldAlert className="w-4 h-4 text-orange-400" />
                   <div className="text-left">
-                    <p className="text-sm font-bold text-white/90">GRBL Alarm 2</p>
+                    <p className="text-sm font-bold text-white/90">{isLaser ? 'GRBL Alarms' : 'Error Recovery'}</p>
                     <p className="text-[9px] text-white/40 uppercase font-bold tracking-wider leading-none mt-1">Difficulty: Expert</p>
                   </div>
                 </div>
               </AccordionTrigger>
               <AccordionContent className="pb-4 text-white/60 text-xs space-y-3">
-                 <p>GRBL Alarm 2 usually means the machine reached its soft limit (software-calculated boundary).</p>
-                 <div className="space-y-2">
-                   <p className="font-bold text-white/80">Solution:</p>
-                   <ul className="list-disc pl-5 space-y-1">
-                     <li>Run the "Home" command ($H) to synchronize machine and work coordinates.</li>
-                     <li>Check $130 (X Max Travel) and $131 (Y Max Travel). ACMER S1 is usually 130x130mm.</li>
-                     <li>In LightBurn/LaserGRBL, ensure your design is within the (0,0) to (130,130) bounding box.</li>
-                   </ul>
-                 </div>
+                {isLaser ? (<>
+                  <p>GRBL Alarm 2 = machine exceeded its soft limit (software boundary). Common on {machineName} with {laser?.workArea} work area.</p>
+                  <div className="space-y-2">
+                    <p className="font-bold text-white/80">Solution:</p>
+                    <ul className="list-disc pl-5 space-y-1">
+                      <li>Run the Home command ($H) to synchronize machine and work coordinates.</li>
+                      <li>Check $130 (X Max Travel) and $131 (Y Max Travel). {machineName} area is {laser?.workArea}.</li>
+                      <li>In {laser?.software || 'your control software'}, ensure your design fits within the bounding box.</li>
+                    </ul>
+                  </div>
+                </>) : (<>
+                  <p>{isResin ? 'Resin printers can fail mid-print due to FEP adhesion pulling the part off the build plate. The screen may also show "print failed" if the USB is disconnected.'
+                    : 'FDM printers may pause with thermal runaway errors, communication timeouts, or stepper skip alarms.'}</p>
+                  <div className="space-y-2">
+                    <p className="font-bold text-white/80">Common Fixes:</p>
+                    <ul className="list-disc pl-5 space-y-1">
+                      {isResin ? (<>
+                        <li>Clean and re-level the build plate. Use a metal scraper on the plate surface.</li>
+                        <li>Replace the FEP film if it shows clouding or punctures. Stretch it evenly with the correct tension.</li>
+                        <li>Warm the resin to 25-30°C in cold environments for proper curing.</li>
+                      </>) : (<>
+                        <li>Thermal runaway: Check thermistor wiring. Loose connection = sudden temperature drop = safety shutdown.</li>
+                        <li>Stepper skipping: Reduce print speed or increase stepper driver current (if accessible). Check belt tension.</li>
+                        <li>Communication timeout: Use SD/USB drive instead of USB tethering for long prints.</li>
+                      </>)}
+                    </ul>
+                  </div>
+                </>)}
               </AccordionContent>
             </AccordionItem>
           </Accordion>
         </div>
 
+        {/* Procedures panel */}
         <div className="space-y-4">
-          <h3 className="text-[10px] font-bold uppercase tracking-widest text-white/40 px-1">Procedures</h3>
+          <h3 className="text-[10px] font-bold uppercase tracking-widest text-white/40 px-1">Procedures — {machineName}</h3>
           <div className="space-y-3">
+            {isLaser ? (<>
               <div className="glass-panel border-white/10 p-4 rounded-xl space-y-2">
-                 <div className="flex gap-3">
-                    <div className="bg-laser-accent/20 p-1.5 rounded-lg h-fit">
-                        <Wind className="w-3.5 h-3.5 text-laser-accent" />
-                    </div>
-                    <div>
-                        <p className="text-xs font-bold text-white/90">Fan Intake</p>
-                        <p className="text-[10px] text-white/50 leading-relaxed">Clear dust to prevent throttling.</p>
-                    </div>
-                 </div>
-                 <Button variant="outline" size="sm" className="w-full text-[9px] font-bold uppercase tracking-wider border-white/10 bg-white/5 h-8">Done</Button>
-              </div>
-
-               <div className="glass-panel border-white/10 p-4 rounded-xl space-y-2">
-                 <div className="flex gap-3">
-                    <div className="bg-purple-500/20 p-1.5 rounded-lg h-fit">
-                        <History className="w-3.5 h-3.5 text-purple-400" />
-                    </div>
-                    <div>
-                        <p className="text-xs font-bold text-white/90">Belts</p>
-                        <p className="text-[10px] text-white/50 leading-relaxed">Check tension for "low bass note".</p>
-                    </div>
-                 </div>
-                 <Button variant="outline" size="sm" className="w-full text-[9px] font-bold uppercase tracking-wider border-white/10 bg-white/5 h-8">Done</Button>
-              </div>
-
-              <Card className="bg-laser-accent overflow-hidden border-none shadow-[0_5px_15px_rgba(0,242,255,0.2)]">
-                <div className="p-3 text-black">
-                   <div className="flex justify-between items-start mb-1">
-                      <Zap className="w-4 h-4" />
-                      <span className="text-[7px] font-black uppercase bg-black/10 px-1 py-0.5 rounded">Firmware</span>
-                   </div>
-                   <p className="text-[10px] font-black leading-tight mb-0.5">Update V2.3</p>
-                   <p className="text-[8px] font-bold opacity-70 mb-2 leading-tight">Improved motor curves.</p>
-                   <Button className="w-full bg-black text-white hover:bg-black/80 font-bold h-7 text-[9px]">Update</Button>
+                <div className="flex gap-3">
+                  <div className="bg-laser-accent/20 p-1.5 rounded-lg h-fit"><Wind className="w-3.5 h-3.5 text-laser-accent" /></div>
+                  <div>
+                    <p className="text-xs font-bold text-white/90">{isCO2 ? 'Clean Mirrors & Lens' : 'Fan Intake'}</p>
+                    <p className="text-[10px] text-white/50 leading-relaxed">{isCO2 ? 'Wipe mirrors and focus lens with lens cleaner. Dirty optics cut power by 30%+.' : 'Clear dust from fan to prevent throttling and overheating.'}</p>
+                  </div>
                 </div>
-              </Card>
+                <Button variant="outline" size="sm" className="w-full text-[9px] font-bold uppercase tracking-wider border-white/10 bg-white/5 h-8">Done</Button>
+              </div>
+              <div className="glass-panel border-white/10 p-4 rounded-xl space-y-2">
+                <div className="flex gap-3">
+                  <div className="bg-purple-500/20 p-1.5 rounded-lg h-fit"><History className="w-3.5 h-3.5 text-purple-400" /></div>
+                  <div>
+                    <p className="text-xs font-bold text-white/90">Belts & Rails</p>
+                    <p className="text-[10px] text-white/50 leading-relaxed">Check belt tension and lubricate linear rails. Loose belts = wobbly lines.</p>
+                  </div>
+                </div>
+                <Button variant="outline" size="sm" className="w-full text-[9px] font-bold uppercase tracking-wider border-white/10 bg-white/5 h-8">Done</Button>
+              </div>
+            </>) : (<>
+              <div className="glass-panel border-white/10 p-4 rounded-xl space-y-2">
+                <div className="flex gap-3">
+                  <div className="bg-laser-accent/20 p-1.5 rounded-lg h-fit"><Wrench className="w-3.5 h-3.5 text-laser-accent" /></div>
+                  <div>
+                    <p className="text-xs font-bold text-white/90">{isResin ? 'Clean Resin Vat' : 'Clean Nozzle'}</p>
+                    <p className="text-[10px] text-white/50 leading-relaxed">{isResin ? 'Filter resin back into the bottle. Wipe FEP film gently. Check for cured debris.' : 'Do a cold pull (nylon) to remove burnt filament. Prevents clogs and under-extrusion.'}</p>
+                  </div>
+                </div>
+                <Button variant="outline" size="sm" className="w-full text-[9px] font-bold uppercase tracking-wider border-white/10 bg-white/5 h-8">Done</Button>
+              </div>
+              <div className="glass-panel border-white/10 p-4 rounded-xl space-y-2">
+                <div className="flex gap-3">
+                  <div className="bg-purple-500/20 p-1.5 rounded-lg h-fit"><History className="w-3.5 h-3.5 text-purple-400" /></div>
+                  <div>
+                    <p className="text-xs font-bold text-white/90">{isResin ? 'Level Build Plate' : 'Bed Leveling'}</p>
+                    <p className="text-[10px] text-white/50 leading-relaxed">{isResin ? 'Re-level the build plate every 5-10 prints to maintain adhesion.' : 'Run auto-level or manually check 4 corners with paper. Good first layer = good print.'}</p>
+                  </div>
+                </div>
+                <Button variant="outline" size="sm" className="w-full text-[9px] font-bold uppercase tracking-wider border-white/10 bg-white/5 h-8">Done</Button>
+              </div>
+            </>)}
+
+            <Card className={`overflow-hidden border-none shadow-[0_5px_15px_rgba(0,242,255,0.2)] ${isLaser ? 'bg-laser-accent' : 'bg-blue-600'}`}>
+              <div className={`p-3 ${isLaser ? 'text-black' : 'text-white'}`}>
+                <div className="flex justify-between items-start mb-1">
+                  <Zap className="w-4 h-4" />
+                  <span className={`text-[7px] font-black uppercase px-1 py-0.5 rounded ${isLaser ? 'bg-black/10' : 'bg-black/20'}`}>Firmware</span>
+                </div>
+                <p className="text-[10px] font-black leading-tight mb-0.5">Check for Updates</p>
+                <p className={`text-[8px] font-bold mb-2 leading-tight ${isLaser ? 'opacity-70' : 'opacity-70'}`}>Keep {machineName} firmware current for stability.</p>
+                <Button className={`w-full font-bold h-7 text-[9px] ${isLaser ? 'bg-black text-white hover:bg-black/80' : 'bg-white text-blue-600 hover:bg-white/90'}`}>Check Update</Button>
+              </div>
+            </Card>
           </div>
         </div>
       </div>

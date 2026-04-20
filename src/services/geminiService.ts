@@ -311,8 +311,8 @@ ${templateDb}
 When generating a blueprint:
 1. DECOMPOSE the project into clear subsystems
 2. For each 3D printed part, generate working OpenSCAD code that produces the actual geometry
-3. For each laser-cut part, generate SVG path markup with real dimensions
-4. For electronics, generate a text wiring diagram showing every connection
+3. For each laser-cut part, generate a SEPARATE SVG drawing with real dimensions, separated by <!--PART_BREAK-->. Each SVG must have a <title> element with the part name.
+4. For electronics, generate a Mermaid flowchart (graph LR or graph TD) showing every wiring connection between components, followed by ---TEXT--- and a text pin-by-pin listing
 5. Use REAL component names and part numbers from the database above
 6. Generate REAL firmware/control code (Arduino/MicroPython) that compiles
 7. Provide step-by-step assembly instructions
@@ -373,8 +373,8 @@ Return exactly as JSON.`;
             }
           },
           openscadCode: { type: Type.STRING, description: "Complete OpenSCAD code for ALL 3D-printable custom parts. Each part as a module with translate(), rotate(), cube(), cylinder(), sphere() calls using NAMED PARAMETERS (e.g. cube([w,d,h]), cylinder(r=5, h=10), sphere(r=3)). Use varied shapes, rounded edges (cylinder for fillets), and realistic proportions. Include an assembly() module that positions all parts together. Use difference() for holes and cutouts. CRITICAL: every module MUST contain at least one primitive (cube/cylinder/sphere) with explicit numeric dimensions." },
-          svgDesign: { type: Type.STRING, description: "SVG markup for laser-cut parts with real dimensions in mm. Use <rect>, <circle>, <path>, <line> elements with proper x,y,width,height attributes. Include a viewBox. Add kerf compensation notes as comments. Use different stroke colors for cut (red) vs engrave (blue) lines." },
-          wiringDiagram: { type: Type.STRING, description: "Full text wiring diagram showing EVERY connection: component pin → wire color → destination pin" },
+          svgDesign: { type: Type.STRING, description: "Generate MULTIPLE SVG drawings separated by <!--PART_BREAK--> comments. Each part SVG should be a complete <svg> element with viewBox, containing the 2D profile/cutline for ONE part. Include a <title> element with the part name. Use <rect>, <circle>, <path>, <line> elements with real dimensions in mm. Use stroke='red' for cut lines, stroke='blue' for engrave lines. Example: <svg viewBox='0 0 100 50'><title>Base Plate</title>...</svg><!--PART_BREAK--><svg viewBox='0 0 60 60'><title>Side Panel</title>...</svg>" },
+          wiringDiagram: { type: Type.STRING, description: "Generate a Mermaid flowchart diagram showing ALL wiring connections. Use 'graph LR' or 'graph TD'. Each component is a node, each wire is an edge with the pin names as labels. Example: graph LR; Arduino[Arduino Uno] -->|D9 PWM| MotorDriver[L298N]; MotorDriver -->|OUT1/OUT2| Motor[Nema 17]; PSU[12V PSU] -->|VIN| MotorDriver; PSU -->|5V reg| Arduino; Also include a text summary after the mermaid block preceded by '---TEXT---' showing pin-by-pin connections." },
           assemblySteps: {
             type: Type.ARRAY,
             items: { type: Type.STRING }
