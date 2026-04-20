@@ -1,5 +1,6 @@
 import { GoogleGenAI, ThinkingLevel, Type, FunctionDeclaration } from "@google/genai";
 import { getComponentDatabaseSummary, getTemplateSummary, DESIGN_PRACTICES, COMMUNITY_SOURCES } from '../designDatabase';
+import { getStyleDirective, get3DStyleDirective, getSketchStyleDirective, type DesignStyle } from '../styleGuides';
 
 const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
 
@@ -69,18 +70,22 @@ const GENERATE_BLUEPRINT_TOOL: FunctionDeclaration = {
   }
 };
 
-export async function generateLaserDesign(prompt: string, style: string = "minimalist", aspectRatio: string = "1:1") {
+export async function generateLaserDesign(prompt: string, style: string = "minimalist", aspectRatio: string = "1:1", referenceImage?: string) {
+  const styleDirective = getStyleDirective(style as DesignStyle);
+  const parts: any[] = [];
+  if (referenceImage) {
+    parts.push({ inlineData: { data: referenceImage.split(',')[1], mimeType: 'image/png' } });
+    parts.push({ text: 'Use the provided reference image as inspiration for the design. Match its proportions and overall form, but adapt it to laser engraving style.\n\n' });
+  }
+  parts.push({ text: `Generate a high-contrast, black and white stencil suitable for laser engraving of: ${prompt}.
+
+${styleDirective}
+
+The output must be clearly reproducible on wood or metal via laser engraving. Produce a single centered design with no text labels unless the user asked for text.` });
+
   const response = await ai.models.generateContent({
     model: "gemini-3.1-flash-image-preview",
-    contents: {
-      parts: [{ text: `Generate a high-contrast, black and white stencil suitable for laser engraving of: ${prompt}. 
-      Style preference: ${style}. 
-      Focus on ${style === 'organic' ? 'fluid, natural curves and voronoi-like patterns' : 
-                style === 'classical' ? 'balanced, symmetrical, and ornate traditional details' : 
-                style === 'deconstructivist' ? 'fragmented, non-rectilinear shapes and chaotic complexity' : 
-                'clean lines and stark contrast'}. 
-      The output should be clearly reproducible on wood or metal.` }]
-    },
+    contents: { parts },
     config: {
       imageConfig: {
         aspectRatio: aspectRatio as any,
@@ -130,6 +135,20 @@ When a user describes a project idea (even vague ones like "LED doorknob" or "he
 4. REFERENCE: Suggest community designs on GitHub, Thingiverse, Instructables, Hackaday
 5. BUILD: When the user is ready, use the 'generate_blueprint' tool to trigger full blueprint generation
 
+NOVEL SOLUTION STRATEGIES — proactively suggest these approaches when relevant:
+
+- REFERENCE-AND-EXTRUDE: "Find a reference image of an existing part, then extrude its silhouette as a starting geometry." This is ideal when the user needs a part shaped like something that already exists (e.g., a bracket, knob, or housing). Suggest they upload a photo of the reference object and use the Sketch panel's Extrude-to-3D feature to create baseline geometry from the image outline.
+
+- HYBRID FABRICATION: Combine 3D printing + laser cutting + off-shelf. For example: laser-cut the flat structural panels from plywood for rigidity, 3D print the complex joints/brackets, and use hardware store fasteners for assembly. Always consider which fabrication method is strongest/cheapest/fastest for each part.
+
+- REVERSE ENGINEER APPROACH: When a user shows a product they want to replicate, suggest analyzing the reference image to identify individual subcomponents, materials, and joints first before designing. Break the reference into "what can be 3D printed," "what should be laser cut," and "what needs to be bought."
+
+- PARAMETRIC VARIANT STRATEGY: Instead of designing a single part, suggest creating parametric OpenSCAD modules where key dimensions are variables. This lets the user quickly iterate on sizes, hole patterns, wall thickness, etc. Recommend this for any part that might need fine-tuning.
+
+- MATERIAL-FIRST DESIGN: Suggest starting from available materials and working backward. "What materials do you have on hand?" can dramatically simplify a project. A design that uses a standard aluminum extrusion frame + 3D printed brackets is cheaper and faster than full custom.
+
+- SKETCH-BEFORE-BUILD: Encourage users to generate a concept sketch (rough ideation → refined concept → technical drawing) before committing to a full blueprint. The sketch can reveal proportion issues, missing features, or better approaches early.
+
 ${getComponentDatabaseSummary()}
 
 ${DESIGN_PRACTICES}
@@ -144,7 +163,9 @@ RULES:
 4. When the user is ready to build (says "let's build it", "design this", "make it", etc.), trigger 'generate_blueprint' with a comprehensive project description summarizing the entire conversation.
 5. Proactively reference similar community projects and suggest searching for them.
 6. When recommending components, use specific part names and approximate prices.
-7. Think about what goes into the project systematically: What are ALL the subsystems? What interfaces between them?`;
+7. Think about what goes into the project systematically: What are ALL the subsystems? What interfaces between them?
+8. Proactively suggest novel strategies from the list above when they fit the user's project.
+9. When the user seems stuck, suggest using the Sketch panel to visualize ideas before engineering them.`;
 
 export async function consultLaserExpert(query: string, history: any[] = [], useThinking: boolean = false) {
   const modelName = useThinking ? "gemini-3.1-pro-preview" : "gemini-3-flash-preview";
@@ -181,6 +202,28 @@ export async function complexThinkingTask(query: string) {
     }
   });
   return response.text;
+}
+
+export async function searchCommunityModels(query: string): Promise<string> {
+  const response = await withRetry(() => ai.models.generateContent({
+    model: "gemini-3-flash-preview",
+    contents: `Search for 3D models, laser cut files, and maker community projects related to: "${query}"
+
+Find specific results from these platforms: Thingiverse, Printables, GrabCAD, GitHub, Instructables, Hackaday, MyMiniFactory, Cults3D.
+
+For each result, provide:
+- **Title** and platform
+- **Direct URL** to the project
+- **Brief description** of what it is
+- **Relevance** note on how it could be used as a reference or starting point
+
+Return the top 5-8 most relevant results. Format as a clean markdown list.`,
+    config: {
+      tools: [{ googleSearch: {} }],
+      toolConfig: { includeServerSideToolInvocations: true }
+    }
+  }));
+  return response.text || 'No results found.';
 }
 
 export async function synthesizeImageEdition(
@@ -249,7 +292,8 @@ export async function generateProjectBlueprint(
   prompt: string,
   designStyle: string,
   printer: string,
-  advisorContext: string = ''
+  advisorContext: string = '',
+  referenceImage?: string
 ) {
   const componentDb = getComponentDatabaseSummary();
   const templateDb = getTemplateSummary();
@@ -279,9 +323,7 @@ When generating a blueprint:
     ? `\n\nCONTEXT FROM DESIGN ADVISOR SESSION:\n${advisorContext}\n` 
     : '';
 
-  const response = await withRetry(() => ai.models.generateContent({
-    model: "gemini-3.1-pro-preview",
-    contents: `${systemPrompt}
+  const textContent = `${systemPrompt}
 
 PROJECT REQUEST: ${prompt}
 ${contextSection}
@@ -289,12 +331,21 @@ Configured Printer: ${printer}
 Design Style: ${designStyle}
 
 Generate a complete, actionable prototype blueprint. Every part should be designed, not just named.
-Focus on ${designStyle === 'organic' ? 'fluid, natural curves and voronoi patterns' : 
-          designStyle === 'classical' ? 'balanced, symmetrical traditional details' : 
-          designStyle === 'deconstructivist' ? 'fragmented, non-rectilinear chaotic complexity' : 
-          'clean lines and stark minimal contrast'}.
 
-Return exactly as JSON.`,
+${get3DStyleDirective(designStyle as DesignStyle)}
+
+Return exactly as JSON.`;
+
+  const contentParts: any[] = [];
+  if (referenceImage) {
+    contentParts.push({ inlineData: { data: referenceImage.split(',')[1], mimeType: 'image/png' } });
+    contentParts.push({ text: 'REFERENCE IMAGE: Use this as a visual guide for proportions, form factor, and overall shape. The design should closely match the reference.\n\n' });
+  }
+  contentParts.push({ text: textContent });
+
+  const response = await withRetry(() => ai.models.generateContent({
+    model: "gemini-3.1-pro-preview",
+    contents: { parts: contentParts },
     config: {
       responseMimeType: "application/json",
       responseSchema: {
@@ -346,4 +397,165 @@ Return exactly as JSON.`,
   }));
 
   return JSON.parse(response.text);
+}
+
+// ── Parametric Variant Generation ─────────────────────────────
+
+export async function generateParametricVariant(
+  existingCode: string,
+  variantRequest: string,
+  designStyle: string
+): Promise<{ code: string; description: string; parameters: Record<string, number> }> {
+  const response = await withRetry(() => ai.models.generateContent({
+    model: "gemini-3.1-pro-preview",
+    contents: `You are an OpenSCAD expert. Given existing OpenSCAD code, generate a parametric variant.
+
+EXISTING CODE:
+\`\`\`openscad
+${existingCode}
+\`\`\`
+
+VARIANT REQUEST: ${variantRequest}
+
+RULES:
+1. Extract hardcoded dimensions into named parameters at the top of the file
+2. Apply the requested variation by changing parameter values
+3. Keep the same structure but make it fully parametric
+4. Add clear comments explaining each parameter
+5. The result must be valid, compilable OpenSCAD
+
+${get3DStyleDirective(designStyle as DesignStyle)}
+
+Return as JSON.`,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          code: { type: Type.STRING, description: "Complete parametric OpenSCAD code" },
+          description: { type: Type.STRING, description: "What changed and why" },
+          parameters: {
+            type: Type.OBJECT,
+            additionalProperties: true,
+            description: "Key parameter names and their values"
+          }
+        },
+        required: ["code", "description"]
+      },
+      thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH }
+    }
+  }));
+
+  return JSON.parse(response.text);
+}
+
+// ── Concept Sketch Generation ─────────────────────────────────
+// Generates concept drawings at different fidelity levels
+
+export type SketchMode = 'rough' | 'refined' | 'technical' | 'presentation';
+
+const SKETCH_MODE_PROMPTS: Record<SketchMode, string> = {
+  rough: `Generate a ROUGH IDEATION SKETCH — loose, gestural pencil lines like a designer's first napkin sketch.
+Show 2-3 quick variations/angles of the concept on one canvas. Emphasis on proportions and large forms, not detail.
+Use light construction lines, quick hatching for shadow side only. The sketch should look fast and energetic — 
+like an industrial designer brainstorming with a soft pencil on tracing paper. Include small annotation arrows 
+pointing to key features with brief handwritten-style labels.`,
+
+  refined: `Generate a REFINED CONCEPT DRAWING — a clean, single-view line drawing of the design.
+Use consistent line weight with slightly heavier outlines for the main silhouette. Light parallel-line shading 
+on shadow surfaces to show 3D form. Include dimension callouts for key measurements and brief material labels.
+The drawing should look like a polished concept from a design studio — confident lines, deliberate composition,
+with a small 3/4 perspective view in the corner. White background. Professional but still hand-drawn feel.`,
+
+  technical: `Generate a TECHNICAL ENGINEERING SKETCH — precise and detailed like a patent drawing or shop drawing.
+Show an exploded or section view with hatching for cut surfaces. Include dimension lines with exact measurements,
+material callouts, part numbers, and assembly notes. Use varied line weight: thick for outlines, medium for 
+visible edges, thin for hidden edges (dashed), thinnest for dimension/leader lines. Add a title block area with
+scale reference. The drawing should be clear enough to manufacture from.`,
+
+  presentation: `Generate a PRESENTATION RENDER SKETCH — a polished marker/digital rendering suitable for a design portfolio.
+Show the product in a natural/lifestyle context with a ground shadow and subtle environment reflections.
+Use smooth gradients, highlight streaks on glossy surfaces, and dramatic lighting (top-left light source).
+Rich tonal range from deep blacks to bright white highlights. Include a subtle background gradient or surface.
+The rendering should sell the design — it should look desirable, professional, and production-ready.`
+};
+
+export async function generateConceptSketch(
+  prompt: string,
+  style: string = 'minimalist',
+  sketchMode: SketchMode = 'refined',
+  referenceImage?: string
+): Promise<string | null> {
+  const sketchStyleDirective = getSketchStyleDirective(style as DesignStyle);
+  const modePrompt = SKETCH_MODE_PROMPTS[sketchMode];
+
+  const parts: any[] = [];
+  if (referenceImage) {
+    parts.push({ inlineData: { data: referenceImage.split(',')[1], mimeType: 'image/png' } });
+    parts.push({ text: `Use the provided reference image as a visual guide for proportions and form. Reinterpret it in the sketch style described below.\n\n` });
+  }
+  parts.push({ text: `SUBJECT: ${prompt}\n\n${modePrompt}\n\n${sketchStyleDirective}\n\nProduce one high-quality concept sketch image. No photo-realism — this must look hand-drawn/sketched.` });
+
+  const response = await withRetry(() => ai.models.generateContent({
+    model: 'gemini-3.1-flash-image-preview',
+    contents: { parts },
+    config: {
+      imageConfig: {
+        aspectRatio: '1:1',
+        imageSize: '1K'
+      }
+    }
+  }));
+
+  for (const part of response.candidates?.[0]?.content?.parts || []) {
+    if (part.inlineData) {
+      return `data:image/png;base64,${part.inlineData.data}`;
+    }
+  }
+  return null;
+}
+
+export async function generateConceptSheet(
+  prompt: string,
+  style: string = 'minimalist',
+  referenceImage?: string
+): Promise<string | null> {
+  const sketchStyleDirective = getSketchStyleDirective(style as DesignStyle);
+
+  const parts: any[] = [];
+  if (referenceImage) {
+    parts.push({ inlineData: { data: referenceImage.split(',')[1], mimeType: 'image/png' } });
+    parts.push({ text: `Use the provided reference image as a visual guide for the design.\n\n` });
+  }
+  parts.push({ text: `Generate a CONCEPT DESIGN SHEET for: ${prompt}
+
+Show FOUR views arranged in a 2x2 grid on a single white canvas:
+- TOP LEFT: 3/4 perspective view (hero shot, largest, most detailed)
+- TOP RIGHT: Front elevation (straight-on, orthographic)
+- BOTTOM LEFT: Side profile (orthographic, showing depth/height)
+- BOTTOM RIGHT: Detail callout (zoomed feature of the most interesting/novel mechanism or joint)
+
+Each view should have a small label. Include construction lines and annotations.
+
+${sketchStyleDirective}
+
+This must look like a professional industrial design concept sheet — hand-drawn quality, not CAD or photo-realistic.` });
+
+  const response = await withRetry(() => ai.models.generateContent({
+    model: 'gemini-3.1-flash-image-preview',
+    contents: { parts },
+    config: {
+      imageConfig: {
+        aspectRatio: '1:1',
+        imageSize: '1K'
+      }
+    }
+  }));
+
+  for (const part of response.candidates?.[0]?.content?.parts || []) {
+    if (part.inlineData) {
+      return `data:image/png;base64,${part.inlineData.data}`;
+    }
+  }
+  return null;
 }

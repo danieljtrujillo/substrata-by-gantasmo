@@ -259,3 +259,129 @@ export const generateEdgeSilhouette = async (
     img.src = imageSource;
   });
 };
+
+/**
+ * Extracts a 2D profile from an image and generates OpenSCAD code to extrude it as a 3D solid.
+ * Reuses the same boundary-extraction pipeline as generateEdgeSilhouette.
+ */
+export interface ExtrusionResult {
+  openscad: string;
+  svgProfile: string;
+  pointCount: number;
+  boundingBox: { width: number; height: number };
+}
+
+export const extractProfileForExtrusion = async (
+  imageSource: string,
+  options: {
+    threshold?: number;
+    simplify?: number;
+    extrudeHeight?: number;
+    scaleMm?: number;
+  } = {}
+): Promise<ExtrusionResult> => {
+  const { threshold = 128, simplify = 3, extrudeHeight = 10, scaleMm = 50 } = options;
+
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return reject("Could not get canvas context");
+
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx.drawImage(img, 0, 0);
+
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imageData.data;
+      const w = canvas.width;
+      const h = canvas.height;
+
+      // Binary mask
+      const mask = new Uint8Array(w * h);
+      for (let i = 0; i < data.length; i += 4) {
+        const alpha = data[i + 3];
+        if (alpha < 10) { mask[i / 4] = 0; continue; }
+        const luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        mask[i / 4] = luma < threshold ? 1 : (alpha > 200 ? 1 : 0);
+      }
+
+      // Extract boundary pixels
+      const edgePoints: { x: number; y: number }[] = [];
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          if (mask[y * w + x] === 0) continue;
+          const neighbors = [
+            y > 0 ? mask[(y - 1) * w + x] : 0,
+            y < h - 1 ? mask[(y + 1) * w + x] : 0,
+            x > 0 ? mask[y * w + (x - 1)] : 0,
+            x < w - 1 ? mask[y * w + (x + 1)] : 0,
+          ];
+          if (neighbors.some(n => n === 0)) edgePoints.push({ x, y });
+        }
+      }
+
+      if (edgePoints.length < 3) {
+        return reject("Could not extract enough boundary points from image");
+      }
+
+      // Sort by angle from centroid
+      const cx = edgePoints.reduce((s, p) => s + p.x, 0) / edgePoints.length;
+      const cy = edgePoints.reduce((s, p) => s + p.y, 0) / edgePoints.length;
+      edgePoints.sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
+
+      // Simplify
+      const simplified = edgePoints.filter((_, i) => i % simplify === 0);
+      if (simplified.length < 3) {
+        return reject("Not enough points after simplification");
+      }
+
+      // Scale to mm: normalize so widest dimension = scaleMm
+      const minX = Math.min(...simplified.map(p => p.x));
+      const maxX = Math.max(...simplified.map(p => p.x));
+      const minY = Math.min(...simplified.map(p => p.y));
+      const maxY = Math.max(...simplified.map(p => p.y));
+      const pw = maxX - minX || 1;
+      const ph = maxY - minY || 1;
+      const scale = scaleMm / Math.max(pw, ph);
+      const scaledH = ph * scale;
+
+      // Center and flip Y (image Y is top-down, OpenSCAD Y is bottom-up)
+      const points = simplified.map(p => ({
+        x: parseFloat(((p.x - minX) * scale).toFixed(3)),
+        y: parseFloat(((maxY - p.y) * scale).toFixed(3))
+      }));
+
+      // Generate OpenSCAD
+      const pointsStr = points.map(p => `[${p.x}, ${p.y}]`).join(',\n    ');
+      const openscad = `// Auto-generated from image profile extraction
+// Bounding box: ${(pw * scale).toFixed(1)}mm x ${scaledH.toFixed(1)}mm x ${extrudeHeight}mm
+// Point count: ${points.length}
+
+linear_extrude(height = ${extrudeHeight}, center = false, convexity = 10) {
+  polygon(points = [
+    ${pointsStr}
+  ]);
+}`;
+
+      // Generate SVG profile for preview
+      const svgPoints = points.map(p => `${p.x},${(scaledH - p.y).toFixed(3)}`).join(' ');
+      const svgW = (pw * scale).toFixed(1);
+      const svgH = scaledH.toFixed(1);
+      const svgProfile = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${svgW} ${svgH}" width="${svgW}mm" height="${svgH}mm">
+  <polygon points="${svgPoints}" fill="none" stroke="#0066ff" stroke-width="0.3"/>
+</svg>`;
+
+      resolve({
+        openscad,
+        svgProfile,
+        pointCount: points.length,
+        boundingBox: { width: pw * scale, height: scaledH }
+      });
+    };
+    img.onerror = reject;
+    img.src = imageSource;
+  });
+};

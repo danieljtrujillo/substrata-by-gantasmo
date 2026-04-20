@@ -64,12 +64,14 @@ import {
   Type,
   Square,
   Circle,
-  Maximize
+  Maximize,
+  PenTool,
+  LayoutGrid
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { onAuthStateChanged, CloudflareUser } from './lib/auth';
 import { Canvas } from '@react-three/fiber';
-import { OrbitControls, Stage, PerspectiveCamera, Environment, Grid } from '@react-three/drei';
+import { OrbitControls, Stage, PerspectiveCamera, Environment, Grid, Html, Float, ContactShadows, Html, Float, ContactShadows, Html, Float, ContactShadows } from '@react-three/drei';
 import * as THREE from 'three';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -98,17 +100,23 @@ import {
   DropdownMenuTrigger,
   DropdownMenuSeparator
 } from "@/components/ui/dropdown-menu";
-import { processImageForLaser, ImageProcessOptions, generateEdgeSilhouette } from './lib/imageProcessor';
+import { processImageForLaser, ImageProcessOptions, generateEdgeSilhouette, extractProfileForExtrusion } from './lib/imageProcessor';
 import { 
   generateLaserDesign, 
   consultLaserExpert, 
   analyzeLaserMaterial,
   getSmartSettings,
   transcribeSpokenPrompt,
-  generateProjectBlueprint
+  generateProjectBlueprint,
+  generateConceptSketch,
+  generateConceptSheet,
+  searchCommunityModels,
+  generateParametricVariant,
+  type SketchMode
 } from './services/geminiService';
 import { speakText, cancelSpeech } from './services/ttsService';
 import { ACMER_S1_PARAMETERS, ACMER_S1_MANUAL_SUMMARY, PROJECT_TEMPLATES, LaserSettings, LabelSettings, LABEL_SIZE_PRESETS, MUNBYN_ITPP130B, PRINTER_DATABASE, LASER_DATABASE } from './constants';
+import { STYLE_GUIDES } from './styleGuides';
 import { loginWithGoogle, logout, AUTH_AVAILABLE } from './lib/auth';
 import { AdvancedEditor } from './components/AdvancedEditor';
 import { DocumentationViewer } from './components/DocumentationViewer';
@@ -378,10 +386,8 @@ const PrototypePreview = ({ openscadCode, parts }: { openscadCode: string; parts
   const primitives = useMemo(() => {
     const parsed = parseOpenSCAD(openscadCode);
     if (parsed.length > 0) return parsed;
-    // Smarter fallback: generate varied geometry from parts list with spatial layout
     if (parts.length === 0) return [];
     const results: ParsedPrimitive[] = [];
-    // Group parts by category for spatial organization
     const categories = [...new Set(parts.map(p => p.category))];
     parts.forEach((part, i) => {
       const catIdx = categories.indexOf(part.category);
@@ -391,7 +397,6 @@ const PrototypePreview = ({ openscadCode, parts }: { openscadCode: string; parts
       const isLaser = part.fabrication === 'laser_cut';
       const isElec = part.category === 'Electronics' || part.category === 'Sensor';
       const isPower = part.category === 'Power';
-      // Choose geometry by type
       let type: ParsedPrimitive['type'] = 'cube';
       let args: number[];
       if (isFab) { type = 'cylinder'; args = [0.25 + (i % 3) * 0.1, 0.25 + (i % 3) * 0.1, 0.4 + (i % 4) * 0.15, 24]; }
@@ -399,7 +404,6 @@ const PrototypePreview = ({ openscadCode, parts }: { openscadCode: string; parts
       else if (isElec) { type = 'cube'; args = [0.3, 0.1, 0.4]; }
       else if (isPower) { type = 'cylinder'; args = [0.15, 0.15, 0.5, 12]; }
       else { type = 'sphere'; args = [0.2 + (i % 3) * 0.05, 16, 16]; }
-
       results.push({
         type, args,
         position: [(col - 1.5) * 1.2, catIdx * 0.8, (row - 1) * 1.2],
@@ -412,44 +416,77 @@ const PrototypePreview = ({ openscadCode, parts }: { openscadCode: string; parts
   }, [openscadCode, parts]);
 
   const [hovered, setHovered] = useState<number | null>(null);
+  const [selected, setSelected] = useState<number | null>(null);
 
   return (
     <group>
-      {primitives.map((prim, i) => (
-        <group key={i} position={prim.position} rotation={prim.rotation}>
-          <mesh
-            castShadow
-            receiveShadow
-            onPointerOver={() => setHovered(i)}
-            onPointerOut={() => setHovered(null)}
-            scale={hovered === i ? 1.05 : 1}
-          >
-            {prim.type === 'cube' && <boxGeometry args={prim.args as [number, number, number]} />}
-            {prim.type === 'cylinder' && <cylinderGeometry args={prim.args as [number, number, number, number]} />}
-            {prim.type === 'sphere' && <sphereGeometry args={prim.args as [number, number, number]} />}
-            <meshPhysicalMaterial
-              color={prim.color}
-              metalness={0.4}
-              roughness={0.35}
-              clearcoat={0.3}
-              clearcoatRoughness={0.2}
-              transparent
-              opacity={hovered === i ? 1 : 0.88}
-            />
-          </mesh>
-          {/* Wireframe edges */}
-          <mesh>
-            {prim.type === 'cube' && <boxGeometry args={prim.args as [number, number, number]} />}
-            {prim.type === 'cylinder' && <cylinderGeometry args={prim.args as [number, number, number, number]} />}
-            {prim.type === 'sphere' && <sphereGeometry args={prim.args as [number, number, number]} />}
-            <meshBasicMaterial color={prim.color} wireframe opacity={0.15} transparent />
-          </mesh>
-        </group>
-      ))}
-      {/* Ground plane */}
-      <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]}>
-        <planeGeometry args={[20, 20]} />
-        <meshStandardMaterial color="#0f172a" transparent opacity={0.5} />
+      {primitives.map((prim, i) => {
+        const isHov = hovered === i;
+        const isSel = selected === i;
+        const isActive = isHov || isSel;
+        const dimmed = selected !== null && !isSel && !isHov;
+        return (
+          <group key={i} position={prim.position} rotation={prim.rotation}>
+            <mesh
+              castShadow
+              receiveShadow
+              onPointerOver={(e) => { e.stopPropagation(); setHovered(i); document.body.style.cursor = 'pointer'; }}
+              onPointerOut={() => { setHovered(null); document.body.style.cursor = 'auto'; }}
+              onClick={(e) => { e.stopPropagation(); setSelected(isSel ? null : i); }}
+              scale={isActive ? 1.05 : 1}
+            >
+              {prim.type === 'cube' && <boxGeometry args={prim.args as [number, number, number]} />}
+              {prim.type === 'cylinder' && <cylinderGeometry args={prim.args as [number, number, number, number]} />}
+              {prim.type === 'sphere' && <sphereGeometry args={prim.args as [number, number, number]} />}
+              <meshPhysicalMaterial
+                color={prim.color}
+                metalness={isActive ? 0.6 : 0.4}
+                roughness={isActive ? 0.2 : 0.35}
+                clearcoat={0.5}
+                clearcoatRoughness={0.15}
+                emissive={isActive ? prim.color : '#000000'}
+                emissiveIntensity={isHov ? 0.35 : isSel ? 0.5 : 0}
+                transparent
+                opacity={dimmed ? 0.3 : isActive ? 1 : 0.88}
+              />
+            </mesh>
+            {/* Edge wireframe */}
+            <mesh>
+              {prim.type === 'cube' && <boxGeometry args={prim.args as [number, number, number]} />}
+              {prim.type === 'cylinder' && <cylinderGeometry args={prim.args as [number, number, number, number]} />}
+              {prim.type === 'sphere' && <sphereGeometry args={prim.args as [number, number, number]} />}
+              <meshBasicMaterial color={isActive ? '#ffffff' : prim.color} wireframe opacity={isActive ? 0.3 : 0.1} transparent />
+            </mesh>
+            {/* Selection ring glow */}
+            {isSel && prim.type !== 'sphere' && (
+              <mesh scale={1.08}>
+                {prim.type === 'cube' && <boxGeometry args={prim.args as [number, number, number]} />}
+                {prim.type === 'cylinder' && <cylinderGeometry args={prim.args as [number, number, number, number]} />}
+                <meshBasicMaterial color={prim.color} transparent opacity={0.12} side={THREE.BackSide} />
+              </mesh>
+            )}
+            {/* Floating label on hover/select */}
+            {isActive && (
+              <Html distanceFactor={8} position={[0, Math.max(...(prim.args.slice(0, 3).map(a => a / 2))) + 0.3, 0]} center
+                style={{ pointerEvents: 'none', userSelect: 'none' }}>
+                <div className="px-2 py-1 rounded bg-black/90 border border-white/20 backdrop-blur-md whitespace-nowrap"
+                  style={{ boxShadow: `0 0 12px ${prim.color}40` }}>
+                  <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: prim.color }}>
+                    {prim.label.replace(/_/g, ' ')}
+                  </span>
+                  <span className="text-[8px] text-white/40 ml-2 uppercase">{prim.type}</span>
+                </div>
+              </Html>
+            )}
+          </group>
+        );
+      })}
+      {/* Ground contact shadows */}
+      <ContactShadows position={[0, -0.01, 0]} opacity={0.4} scale={20} blur={2} far={6} />
+      <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.02, 0]}
+        onClick={() => setSelected(null)}>
+        <planeGeometry args={[40, 40]} />
+        <meshStandardMaterial color="#0a0f1e" transparent opacity={0.6} />
       </mesh>
     </group>
   );
@@ -503,6 +540,7 @@ export default function App() {
   const [advisorCollapsed, setAdvisorCollapsed] = useState(false);
   const [propsCollapsed, setPropsCollapsed] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
+  const [libraryFilter, setLibraryFilter] = useState<string>('all');
   const [showMaintenance, setShowMaintenance] = useState(false);
   const [showDocs, setShowDocs] = useState(false);
   const [isAdvancedEditorOpen, setIsAdvancedEditorOpen] = useState(false);
@@ -517,6 +555,7 @@ export default function App() {
   const [designFileViewMode, setDesignFileViewMode] = useState<'preview' | 'code'>('preview');
   const [selectedPrinter, setSelectedPrinter] = useState('Saturn 3 Ultra');
   const [bomSortMode, setBomSortMode] = useState<'fastest' | 'cheapest' | 'none'>('none');
+  const [shoppingList, setShoppingList] = useState<Set<string>>(new Set());
   const [generationStage, setGenerationStage] = useState('');
   const [materialPresets, setMaterialPresets] = useState<Record<string, LaserSettings>>(ACMER_S1_PARAMETERS);
   const [originalImage, setOriginalImage] = useState<string | null>(null);
@@ -545,6 +584,20 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+  // ── Concept Sketch State ──
+  const [sketchMode, setSketchMode] = useState<SketchMode>('refined');
+  const [conceptSketchImage, setConceptSketchImage] = useState<string | null>(null);
+  const [isGeneratingSketch, setIsGeneratingSketch] = useState(false);
+  const [showConceptPanel, setShowConceptPanel] = useState(false);
+
+  // ── Reference Image State ──
+  const [referenceImage, setReferenceImage] = useState<string | null>(null);
+  const referenceInputRef = useRef<HTMLInputElement>(null);
+  const [communityResults, setCommunityResults] = useState<string | null>(null);
+  const [isSearchingCommunity, setIsSearchingCommunity] = useState(false);
+  const [variantPrompt, setVariantPrompt] = useState('');
+  const [isGeneratingVariant, setIsGeneratingVariant] = useState(false);
 
   // ── Label/Sticker/Decal State ──
   const [labelSettings, setLabelSettings] = useState<LabelSettings>({
@@ -878,7 +931,7 @@ export default function App() {
     if (!designPrompt) return;
     setIsGenerating(true);
     try {
-      const result = await generateLaserDesign(designPrompt, designStyle);
+      const result = await generateLaserDesign(designPrompt, designStyle, '1:1', referenceImage || undefined);
       if (result) {
         setOriginalImage(result);
         toast.success(`Design generated in ${designStyle} style!`);
@@ -887,6 +940,62 @@ export default function App() {
       toast.error("Generation failed");
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  const handleGenerateSketch = async (mode?: SketchMode, asSheet?: boolean) => {
+    const prompt = engineeringMode === 'prototype' ? protoPrompt : designPrompt;
+    if (!prompt) { toast.error('Enter a design prompt first'); return; }
+    setIsGeneratingSketch(true);
+    try {
+      const m = mode || sketchMode;
+      const ref = referenceImage || originalImage || undefined;
+      const result = asSheet
+        ? await generateConceptSheet(prompt, designStyle, ref)
+        : await generateConceptSketch(prompt, designStyle, m, ref);
+      if (result) {
+        setConceptSketchImage(result);
+        setShowConceptPanel(true);
+        toast.success(asSheet ? 'Concept sheet generated!' : `${m} sketch generated!`);
+      } else {
+        toast.error('Sketch generation returned no image');
+      }
+    } catch (error) {
+      toast.error('Sketch generation failed');
+    } finally {
+      setIsGeneratingSketch(false);
+    }
+  };
+
+  const handleSearchCommunity = async () => {
+    const prompt = engineeringMode === 'prototype' ? protoPrompt : designPrompt;
+    if (!prompt) { toast.error('Enter a design prompt first'); return; }
+    setIsSearchingCommunity(true);
+    try {
+      const results = await searchCommunityModels(prompt);
+      setCommunityResults(results);
+      setShowConceptPanel(true);
+      toast.success('Community search complete!');
+    } catch {
+      toast.error('Community search failed');
+    } finally {
+      setIsSearchingCommunity(false);
+    }
+  };
+
+  const handleGenerateVariant = async () => {
+    if (!protoProject?.openscadCode) { toast.error('Generate a prototype first'); return; }
+    if (!variantPrompt.trim()) { toast.error('Describe the variant you want'); return; }
+    setIsGeneratingVariant(true);
+    try {
+      const result = await generateParametricVariant(protoProject.openscadCode, variantPrompt, designStyle);
+      setProtoProject(prev => prev ? { ...prev, openscadCode: result.code, designNotes: prev.designNotes + `\n\nVARIANT: ${result.description}` } : prev);
+      setVariantPrompt('');
+      toast.success('Parametric variant generated!');
+    } catch {
+      toast.error('Variant generation failed');
+    } finally {
+      setIsGeneratingVariant(false);
     }
   };
 
@@ -990,7 +1099,7 @@ export default function App() {
         setGenerationStage(GENERATION_STAGES[stageIdx]);
       }, 2500);
 
-      const data = await generateProjectBlueprint(activePrompt, designStyle, selectedPrinter, '');
+      const data = await generateProjectBlueprint(activePrompt, designStyle, selectedPrinter, '', referenceImage || undefined);
       
       clearInterval(progressInterval);
       setProtoGenerationProgress(90);
@@ -1034,11 +1143,42 @@ export default function App() {
     try {
         const result = await analyzeLaserMaterial(originalImage);
         toast.info("Material Analysis Complete: " + result.slice(0, 100) + "...");
-        // In a real app we'd parse this for power/speed
     } catch (e) {
         toast.error("Analysis failed");
     } finally {
         setIsAnalyzing(false);
+    }
+  }
+
+  const handleExtrudeFromImage = async () => {
+    const src = conceptSketchImage || referenceImage || originalImage;
+    if (!src) { toast.error('Load or generate an image first'); return; }
+    try {
+      toast.info('Extracting profile and generating extrusion...');
+      const result = await extractProfileForExtrusion(src, { extrudeHeight: 10, scaleMm: 50 });
+      // Inject the extruded OpenSCAD into a new prototype project
+      const newProject: PrototypeProject = {
+        id: `extrude_${Date.now()}`,
+        name: 'Extruded Profile',
+        description: `Profile extruded from reference image (${result.pointCount} points, ${result.boundingBox.width.toFixed(1)}x${result.boundingBox.height.toFixed(1)}mm)`,
+        designNotes: 'Auto-generated from image silhouette extrusion. Edit the OpenSCAD code to add features like fillets, holes, or Boolean operations.',
+        parts: [],
+        openscadCode: result.openscad,
+        svgDesign: result.svgProfile,
+        wiringDiagram: '',
+        assemblySteps: ['Modify extruded profile in OpenSCAD', 'Export as STL for 3D printing', 'Add detail features as needed'],
+        code: '',
+        printingFiles: [],
+        communityRefs: [],
+        status: 'ready'
+      };
+      setProtoProject(newProject);
+      setEngineeringMode('prototype');
+      setActiveOutputTab('3d');
+      setActiveDesignFileTab('openscad');
+      toast.success(`Profile extruded: ${result.pointCount} points, ${result.boundingBox.width.toFixed(1)}x${result.boundingBox.height.toFixed(1)}mm`);
+    } catch (error) {
+      toast.error('Extrusion failed — image may not have clear edges');
     }
   }
 
@@ -1122,19 +1262,56 @@ export default function App() {
                   </Card>
                 ))}
                 {/* Templates */}
-                <div className="col-span-full pt-4 pb-2 flex items-center justify-between border-t border-white/5 mt-2">
-                  <h3 className="text-[11px] font-bold uppercase tracking-widest text-white/40">Stock Image Library</h3>
-                  {user && <Button variant="ghost" size="sm" onClick={handleClaimAllTemplates} className="text-[10px] font-bold uppercase text-laser-accent hover:bg-laser-accent/10 h-7"><Plus className="w-3 h-3 mr-1" /> Add All</Button>}
+                <div className="col-span-full pt-4 pb-2 flex flex-col gap-2 border-t border-white/5 mt-2">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-[11px] font-bold uppercase tracking-widest text-white/40">Design Library — {PROJECT_TEMPLATES.length} templates</h3>
+                    {user && <Button variant="ghost" size="sm" onClick={handleClaimAllTemplates} className="text-[10px] font-bold uppercase text-laser-accent hover:bg-laser-accent/10 h-7"><Plus className="w-3 h-3 mr-1" /> Add All</Button>}
+                  </div>
+                  <div className="flex gap-1 flex-wrap">
+                    {['all', ...Array.from(new Set(PROJECT_TEMPLATES.map(t => t.category.split(' / ')[0])))].map(cat => (
+                      <button key={cat} onClick={() => setLibraryFilter(cat)}
+                        className={`text-[8px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-full border transition-colors ${libraryFilter === cat ? 'border-laser-accent text-laser-accent bg-laser-accent/10' : 'border-white/10 text-white/40 hover:border-white/30'}`}>
+                        {cat}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                {PROJECT_TEMPLATES.map(template => (
+                {PROJECT_TEMPLATES
+                  .filter(t => libraryFilter === 'all' || t.category.startsWith(libraryFilter))
+                  .map(template => (
                   <Card key={template.id} className="group overflow-hidden glass-panel border-white/10 cursor-pointer hover:shadow-cyan-500/10 transition-all"
-                    onClick={() => { setOriginalImage(template.image); setShowLibrary(false); toast.info(`Loaded ${template.name}`); }}>
-                    <div className="aspect-square relative flex items-center justify-center bg-black/20">
+                    onClick={() => {
+                      if (template.suggestedPrompt) {
+                        setDesignPrompt(template.suggestedPrompt);
+                        if (template.openscadSnippet && engineeringMode === 'prototype') {
+                          setProtoProject(prev => prev ? { ...prev, openscadCode: template.openscadSnippet! } : null);
+                        }
+                      }
+                      setOriginalImage(template.image);
+                      setShowLibrary(false);
+                      toast.info(`Loaded ${template.name}`);
+                    }}>
+                    <div className="aspect-[4/3] relative flex items-center justify-center bg-black/20 overflow-hidden">
                       <img src={template.image} alt={template.name} className="object-cover w-full h-full opacity-60 group-hover:opacity-100 transition-opacity" referrerPolicy="no-referrer" />
+                      {template.complexity && (
+                        <Badge className={`absolute top-1.5 right-1.5 text-[7px] py-0 px-1.5 ${
+                          template.complexity === 'beginner' ? 'bg-green-500/80 text-white' :
+                          template.complexity === 'intermediate' ? 'bg-yellow-500/80 text-black' :
+                          'bg-red-500/80 text-white'
+                        }`}>{template.complexity}</Badge>
+                      )}
                     </div>
-                    <div className="p-3 border-t border-white/10">
-                      <p className="text-xs font-bold uppercase tracking-tight text-white">{template.name}</p>
-                      <span className="text-[9px] text-white/50">{template.category}</span>
+                    <div className="p-2 border-t border-white/10">
+                      <p className="text-[10px] font-bold uppercase tracking-tight text-white truncate">{template.name}</p>
+                      <span className="text-[8px] text-white/40">{template.category}</span>
+                      {template.description && <p className="text-[8px] text-white/30 mt-0.5 line-clamp-2">{template.description}</p>}
+                      {template.tags && (
+                        <div className="flex gap-0.5 mt-1 flex-wrap">
+                          {template.tags.slice(0, 3).map(tag => (
+                            <span key={tag} className="text-[7px] px-1 py-0 bg-white/5 rounded text-white/30">{tag}</span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </Card>
                 ))}
@@ -1180,6 +1357,100 @@ export default function App() {
             </motion.div>
           </motion.div>
         )}
+
+        {/* ── Concept Sketch Panel ── */}
+        {showConceptPanel && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[80] bg-black/60 backdrop-blur-sm" onClick={() => setShowConceptPanel(false)}>
+            <motion.div initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="absolute right-0 top-0 bottom-0 w-full max-w-xl glass-panel !rounded-none border-l border-white/10 overflow-auto"
+              onClick={e => e.stopPropagation()}>
+              <div className="p-4 border-b border-white/10 flex items-center justify-between sticky top-0 bg-black/60 backdrop-blur-xl z-10">
+                <h2 className="text-sm font-black uppercase tracking-widest text-white">Concept Sketch</h2>
+                <Button variant="ghost" size="icon" onClick={() => setShowConceptPanel(false)} className="h-8 w-8 text-white/60 hover:text-white"><X className="w-4 h-4" /></Button>
+              </div>
+              <div className="p-4 space-y-4">
+                {/* Sketch Mode Selector */}
+                <div>
+                  <label className="text-[9px] font-black uppercase tracking-widest text-white/50 mb-2 block">Sketch Mode</label>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {([['rough', 'Rough Ideation'], ['refined', 'Refined Concept'], ['technical', 'Technical Drawing'], ['presentation', 'Presentation Render']] as const).map(([mode, label]) => (
+                      <button key={mode} onClick={() => setSketchMode(mode)}
+                        className={`px-3 py-2 text-[9px] font-bold uppercase tracking-wider rounded border transition-all ${sketchMode === mode ? 'bg-blue-600 text-white border-blue-600' : 'bg-white/5 text-white/40 border-white/10 hover:text-white/70'}`}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Generate buttons */}
+                <div className="flex gap-2">
+                  <Button onClick={() => handleGenerateSketch()} disabled={isGeneratingSketch}
+                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white h-9 text-[10px] font-bold uppercase">
+                    {isGeneratingSketch ? <RefreshCw className="w-3 h-3 mr-1.5 animate-spin" /> : <PenTool className="w-3 h-3 mr-1.5" />}
+                    Generate Sketch
+                  </Button>
+                  <Button onClick={() => handleGenerateSketch(undefined, true)} disabled={isGeneratingSketch}
+                    className="flex-1 bg-white/10 hover:bg-white/20 text-white h-9 text-[10px] font-bold uppercase">
+                    {isGeneratingSketch ? <RefreshCw className="w-3 h-3 mr-1.5 animate-spin" /> : <LayoutGrid className="w-3 h-3 mr-1.5" />}
+                    Concept Sheet
+                  </Button>
+                </div>
+
+                {/* Sketch Output */}
+                {conceptSketchImage && (
+                  <div className="space-y-2">
+                    <img src={conceptSketchImage} alt="Concept sketch" className="w-full rounded-lg border border-white/10" />
+                    <div className="flex gap-2">
+                      <a href={conceptSketchImage} download={`concept-${sketchMode}-${Date.now()}.png`}
+                        className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-white/5 hover:bg-white/10 rounded text-[9px] font-bold uppercase text-white/60 hover:text-white transition-colors border border-white/10">
+                        <Download className="w-3 h-3" /> Download
+                      </a>
+                      <Button variant="ghost" onClick={() => { setOriginalImage(conceptSketchImage); setShowConceptPanel(false); toast.success('Sketch loaded as reference image'); }}
+                        className="flex-1 h-auto py-2 text-[9px] font-bold uppercase text-white/60 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10">
+                        <ImageIcon className="w-3 h-3 mr-1.5" /> Use as Reference
+                      </Button>
+                      <Button variant="ghost" onClick={() => { handleExtrudeFromImage(); setShowConceptPanel(false); }}
+                        className="flex-1 h-auto py-2 text-[9px] font-bold uppercase text-white/60 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10">
+                        <Box className="w-3 h-3 mr-1.5" /> Extrude to 3D
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {!conceptSketchImage && !isGeneratingSketch && (
+                  <div className="flex flex-col items-center justify-center py-12 text-white/20">
+                    <PenTool className="w-10 h-10 mb-3" />
+                    <p className="text-[10px] font-bold uppercase tracking-wider">Enter a prompt and generate a concept sketch</p>
+                    <p className="text-[9px] mt-1 text-white/15">Uses your current design prompt and style</p>
+                  </div>
+                )}
+
+                {isGeneratingSketch && !conceptSketchImage && (
+                  <div className="flex flex-col items-center justify-center py-12">
+                    <RefreshCw className="w-8 h-8 animate-spin text-blue-400 mb-3" />
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-white/40">Generating {sketchMode} sketch...</p>
+                  </div>
+                )}
+
+                {/* Community Search */}
+                <div className="border-t border-white/10 pt-4">
+                  <label className="text-[9px] font-black uppercase tracking-widest text-white/50 mb-2 block">Community Models</label>
+                  <Button onClick={handleSearchCommunity} disabled={isSearchingCommunity}
+                    className="w-full bg-white/10 hover:bg-white/20 text-white h-9 text-[10px] font-bold uppercase">
+                    {isSearchingCommunity ? <RefreshCw className="w-3 h-3 mr-1.5 animate-spin" /> : <Search className="w-3 h-3 mr-1.5" />}
+                    Search Community Projects
+                  </Button>
+                  {communityResults && (
+                    <div className="mt-3 p-3 rounded-lg bg-white/5 border border-white/10 text-[11px] text-white/70 leading-relaxed max-h-[300px] overflow-auto prose prose-invert prose-sm"
+                      dangerouslySetInnerHTML={{ __html: communityResults.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br/>') }} />
+                  )}
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
       </AnimatePresence>
 
       {/* ═══════ TOOLBAR ═══════ */}
@@ -1208,6 +1479,7 @@ export default function App() {
           <div className="hidden md:flex gap-0.5 ml-2">
             {(['minimalist', 'deconstructivist', 'classical', 'organic'] as const).map(s => (
               <button key={s} onClick={() => setDesignStyle(s)}
+                title={STYLE_GUIDES[s].description}
                 className={`px-2 py-1 text-[8px] font-black uppercase tracking-tight rounded transition-all border ${designStyle === s ? (engineeringMode === 'laser' ? 'bg-laser-accent text-black border-laser-accent' : 'bg-blue-600 text-white border-blue-600') : 'bg-transparent text-white/30 border-transparent hover:text-white/50'}`}>
                 {s}
               </button>
@@ -1224,6 +1496,9 @@ export default function App() {
           </Button>
           <Button variant="ghost" size="sm" onClick={() => setShowDocs(true)} className="h-7 text-[9px] font-bold uppercase text-white/50 hover:text-white hover:bg-white/10 gap-1">
             <BookOpen className="w-3.5 h-3.5" /> Docs
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setShowConceptPanel(true)} className="h-7 text-[9px] font-bold uppercase text-white/50 hover:text-white hover:bg-white/10 gap-1">
+            <PenTool className="w-3.5 h-3.5" /> Sketch
           </Button>
           <Separator orientation="vertical" className="h-5 bg-white/10 mx-1" />
           <Button size="sm" className="accent-btn h-7 text-[9px] shadow-[0_0_12px_rgba(0,242,255,0.2)]" onClick={handleSaveProject}>
@@ -1333,6 +1608,25 @@ export default function App() {
                       <button key={p} onClick={() => setDesignPrompt(p)} className="text-[9px] font-bold uppercase tracking-widest px-2 py-1 glass-panel border-white/10 text-white/60 hover:border-laser-accent hover:text-laser-accent transition-colors">{p}</button>
                     ))}
                   </div>
+                  {/* Reference Image */}
+                  <div className="flex items-center gap-2 mt-2">
+                    <input ref={referenceInputRef} type="file" accept="image/*" className="hidden" onChange={e => {
+                      const file = e.target.files?.[0];
+                      if (file) { const r = new FileReader(); r.onload = ev => setReferenceImage(ev.target?.result as string); r.readAsDataURL(file); }
+                    }} />
+                    <button onClick={() => referenceInputRef.current?.click()}
+                      className="text-[9px] font-bold uppercase tracking-widest px-2 py-1 glass-panel border-white/10 text-white/40 hover:text-laser-accent hover:border-laser-accent transition-colors flex items-center gap-1">
+                      <ImageIcon className="w-3 h-3" /> {referenceImage ? 'Change Ref' : 'Add Reference'}
+                    </button>
+                    {referenceImage && (
+                      <>
+                        <img src={referenceImage} alt="ref" className="w-7 h-7 rounded border border-white/20 object-cover" />
+                        <button onClick={() => setReferenceImage(null)} className="text-[8px] text-white/30 hover:text-red-400 transition-colors">
+                          <X className="w-3 h-3" />
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
@@ -1359,6 +1653,25 @@ export default function App() {
                     <Button size="icon" variant="ghost" className="h-7 w-7 text-white/60 hover:text-white"><Settings2 className="w-3.5 h-3.5" /></Button>
                     <Separator orientation="vertical" className="h-7 bg-white/10" />
                     <Button size="icon" variant="ghost" className="h-7 w-7 text-blue-400 hover:text-blue-300"><Printer className="w-3.5 h-3.5" /></Button>
+                    <Separator orientation="vertical" className="h-7 bg-white/10" />
+                    <Button size="icon" variant="ghost" className="h-7 w-7 text-white/60 hover:text-white" title="Upload reference image"
+                      onClick={() => referenceInputRef.current?.click()}>
+                      <ImageIcon className="w-3.5 h-3.5" />
+                    </Button>
+                    <Button size="icon" variant="ghost" className="h-7 w-7 text-white/60 hover:text-white" title="Generate concept sheet"
+                      onClick={() => setShowConceptPanel(true)}>
+                      <PenTool className="w-3.5 h-3.5" />
+                    </Button>
+                    <Button size="icon" variant="ghost" className="h-7 w-7 text-white/60 hover:text-white" title="Extrude image to 3D"
+                      onClick={handleExtrudeFromImage} disabled={!originalImage && !conceptSketchImage && !referenceImage}>
+                      <Box className="w-3.5 h-3.5" />
+                    </Button>
+                    {referenceImage && (
+                      <div className="flex items-center gap-1">
+                        <img src={referenceImage} alt="ref" className="w-6 h-6 rounded border border-white/20 object-cover" />
+                        <button onClick={() => setReferenceImage(null)} className="text-white/30 hover:text-red-400"><X className="w-3 h-3" /></button>
+                      </div>
+                    )}
                   </Card>
                 </div>
 
@@ -1510,30 +1823,85 @@ export default function App() {
                   <div className="flex items-center justify-between">
                     <p className="text-xs font-bold text-white/60">Sourcing — {sortedParts.length} parts</p>
                     <div className="flex gap-1">
+                      {shoppingList.size > 0 && (
+                        <Badge className="bg-green-500/20 text-green-400 text-[8px] px-1.5 py-0 mr-1">
+                          {shoppingList.size} in list — ${sortedParts.filter(p => shoppingList.has(p.id)).reduce((s, p) => s + p.price, 0).toFixed(2)}
+                        </Badge>
+                      )}
                       <Button size="sm" variant={bomSortMode === 'fastest' ? 'default' : 'outline'} className={`h-5 text-[8px] ${bomSortMode === 'fastest' ? 'bg-blue-600' : 'bg-white/5 border-white/10 text-white/60'}`}
                         onClick={() => setBomSortMode(bomSortMode === 'fastest' ? 'none' : 'fastest')}>FASTEST</Button>
                       <Button size="sm" variant={bomSortMode === 'cheapest' ? 'default' : 'outline'} className={`h-5 text-[8px] ${bomSortMode === 'cheapest' ? 'bg-blue-600' : 'bg-white/5 border-white/10 text-white/60'}`}
                         onClick={() => setBomSortMode(bomSortMode === 'cheapest' ? 'none' : 'cheapest')}>CHEAPEST</Button>
+                      {shoppingList.size > 0 && (
+                        <Button size="sm" variant="outline" className="h-5 text-[8px] bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20"
+                          onClick={() => {
+                            const items = sortedParts.filter(p => shoppingList.has(p.id));
+                            const text = `SUBSTRATA Shopping List\n${'='.repeat(40)}\n${items.map(p => `[ ] ${p.name} — $${p.price.toFixed(2)} (${p.source})\n    ${p.specs}\n    ${p.url || 'No link'}`).join('\n\n')}\n\nTotal: $${items.reduce((s, p) => s + p.price, 0).toFixed(2)}`;
+                            navigator.clipboard.writeText(text);
+                            toast.success(`Copied ${items.length} items to clipboard`);
+                          }}>
+                          <ClipboardList className="w-3 h-3 mr-1" /> COPY LIST
+                        </Button>
+                      )}
                     </div>
                   </div>
-                  {sortedParts.map(part => (
-                    <div key={part.id} className="flex items-center justify-between px-3 py-2 bg-white/5 rounded-lg border border-white/5 hover:bg-white/10 transition-colors">
-                      <div className="flex items-center gap-3">
-                        <Package className="w-4 h-4 text-blue-400 shrink-0" />
-                        <div>
-                          <p className="text-xs font-bold text-white">{part.name}</p>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            <Badge variant="secondary" className="bg-blue-500/10 text-blue-400 text-[8px] px-1 py-0">{part.source}</Badge>
-                            <span className="text-[9px] text-white/40 font-mono">{part.specs}</span>
+                  {sortedParts.map(part => {
+                    const inList = shoppingList.has(part.id);
+                    return (
+                      <div key={part.id} className={`flex items-center justify-between px-3 py-2 rounded-lg border transition-colors ${inList ? 'bg-green-500/10 border-green-500/20 hover:bg-green-500/15' : 'bg-white/5 border-white/5 hover:bg-white/10'}`}>
+                        <div className="flex items-center gap-3">
+                          <button
+                            onClick={() => setShoppingList(prev => {
+                              const next = new Set(prev);
+                              if (next.has(part.id)) next.delete(part.id); else next.add(part.id);
+                              return next;
+                            })}
+                            className={`w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 transition-colors ${inList ? 'border-green-400 bg-green-500/30 text-green-300' : 'border-white/20 hover:border-blue-400'}`}
+                          >
+                            {inList && <Check className="w-3 h-3" />}
+                          </button>
+                          <Package className="w-4 h-4 text-blue-400 shrink-0" />
+                          <div>
+                            {part.url ? (
+                              <a href={part.url} target="_blank" rel="noopener noreferrer"
+                                className="text-xs font-bold text-blue-300 hover:text-blue-200 underline underline-offset-2 decoration-blue-400/30 hover:decoration-blue-400 transition-colors flex items-center gap-1">
+                                {part.name} <ExternalLink className="w-3 h-3 opacity-50" />
+                              </a>
+                            ) : (
+                              <p className="text-xs font-bold text-white">{part.name}</p>
+                            )}
+                            <div className="flex items-center gap-2 mt-0.5">
+                              <Badge variant="secondary" className="bg-blue-500/10 text-blue-400 text-[8px] px-1 py-0">{part.source}</Badge>
+                              <span className="text-[9px] text-white/40 font-mono">{part.specs}</span>
+                            </div>
                           </div>
                         </div>
+                        <div className="text-right flex items-center gap-3">
+                          <div>
+                            <p className="text-xs font-mono text-white">${part.price.toFixed(2)}</p>
+                            <p className="text-[9px] text-green-400 font-bold">{part.speed}</p>
+                          </div>
+                          {part.url && (
+                            <a href={part.url} target="_blank" rel="noopener noreferrer"
+                              className="text-white/20 hover:text-blue-400 transition-colors" title="Open vendor page">
+                              <ExternalLink className="w-3.5 h-3.5" />
+                            </a>
+                          )}
+                        </div>
                       </div>
-                      <div className="text-right">
-                        <p className="text-xs font-mono text-white">${part.price.toFixed(2)}</p>
-                        <p className="text-[9px] text-green-400 font-bold">{part.speed}</p>
-                      </div>
+                    );
+                  })}
+                  {sortedParts.length > 0 && (
+                    <div className="flex items-center justify-between pt-2 border-t border-white/10">
+                      <Button size="sm" variant="outline" className="h-6 text-[8px] bg-white/5 border-white/10 text-white/40"
+                        onClick={() => setShoppingList(prev => {
+                          const allIds = sortedParts.map(p => p.id);
+                          const allSelected = allIds.every(id => prev.has(id));
+                          return allSelected ? new Set<string>() : new Set(allIds);
+                        })}>{sortedParts.every(p => shoppingList.has(p.id)) ? 'Deselect All' : 'Select All'}</Button>
+                      <p className="text-xs font-mono text-white/60">Total: <span className="text-white font-bold">${sortedParts.reduce((s, p) => s + p.price, 0).toFixed(2)}</span></p>
                     </div>
-                  ))}
+                  )}
                   {!protoProject && <p className="text-center py-8 text-white/20 text-xs font-mono tracking-widest">NO PARTS GENERATED YET</p>}
                 </div>
               )}
@@ -1602,6 +1970,20 @@ export default function App() {
                                   );
                                 });
                               })()}
+                            </div>
+                            {/* Parametric Variant Generator */}
+                            <div className="mt-4 pt-3 border-t border-white/10">
+                              <label className="text-[9px] font-black uppercase tracking-widest text-white/50 mb-2 block">Parametric Variant</label>
+                              <div className="flex gap-2">
+                                <input value={variantPrompt} onChange={e => setVariantPrompt(e.target.value)}
+                                  placeholder="e.g. make it 50% larger, add mounting holes, thinner walls..."
+                                  className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-[11px] text-white placeholder-white/20 outline-none focus:border-blue-500/50"
+                                  onKeyDown={e => e.key === 'Enter' && handleGenerateVariant()} />
+                                <Button onClick={handleGenerateVariant} disabled={isGeneratingVariant}
+                                  className="bg-blue-600 hover:bg-blue-700 text-white h-8 text-[9px] font-bold uppercase px-3">
+                                  {isGeneratingVariant ? <RefreshCw className="w-3 h-3 animate-spin" /> : 'Variant'}
+                                </Button>
+                              </div>
                             </div>
                           </div>
                         ) : (
