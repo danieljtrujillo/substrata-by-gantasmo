@@ -263,17 +263,25 @@ function parseOpenSCAD(code: string): ParsedPrimitive[] {
       { type: 'cylinder', args: [0.3, 0.2, 0.4, 24], position: [0, 2.1, 0], rotation: [0, 0, 0], color: '#10b981', label: 'sensor_mount' },
       { type: 'sphere', args: [0.15, 16, 16], position: [0, 2.5, 0], rotation: [0, 0, 0], color: '#ef4444', label: 'indicator' },
     );
+    return primitives; // fallback geometry is already viewport-scaled
   }
 
-  return primitives;
+  // Apply UNIFORM scaling — single bounding-box-based scale for the entire scene
+  // This ensures all parts maintain correct proportions relative to each other
+  return normalizeScene(primitives);
 }
 
-function extractPrimitives(body: string, moduleName: string, color: string, out: ParsedPrimitive[], seedOffset: number) {
-  // Track transform stack for nested scopes
+function extractPrimitives(body: string, moduleName: string, color: string, out: ParsedPrimitive[], _seedOffset: number) {
   const lines = body.split('\n');
   let currentTranslate: [number, number, number] = [0, 0, 0];
   let currentRotation: [number, number, number] = [0, 0, 0];
   let currentColor = color;
+
+  const namedColors: Record<string, string> = {
+    red: '#ef4444', blue: '#3b82f6', green: '#22c55e', yellow: '#eab308',
+    orange: '#f97316', purple: '#a855f7', cyan: '#06b6d4', pink: '#ec4899',
+    white: '#f8fafc', gray: '#6b7280', black: '#1e293b', silver: '#94a3b8'
+  };
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -282,33 +290,26 @@ function extractPrimitives(body: string, moduleName: string, color: string, out:
     // Parse color
     const colorMatch = trimmed.match(/color\(\s*"(\w+)"\s*\)/) || trimmed.match(/color\(\s*\[([\d.,\s]+)\]\s*\)/);
     if (colorMatch) {
-      const namedColors: Record<string, string> = {
-        red: '#ef4444', blue: '#3b82f6', green: '#22c55e', yellow: '#eab308',
-        orange: '#f97316', purple: '#a855f7', cyan: '#06b6d4', pink: '#ec4899',
-        white: '#f8fafc', gray: '#6b7280', black: '#1e293b', silver: '#94a3b8'
-      };
       if (colorMatch[1] && namedColors[colorMatch[1].toLowerCase()]) {
         currentColor = namedColors[colorMatch[1].toLowerCase()];
       }
     }
 
-    // Parse translate
+    // Parse translate — store RAW mm values, swap Y/Z for OpenSCAD→Three.js
     const translateMatch = trimmed.match(/translate\(\[([^\]]+)\]\)/);
     if (translateMatch) {
       const vals = translateMatch[1].split(',').map(v => parseFloat(v.trim()) || 0);
-      const maxVal = Math.max(1, ...vals.map(Math.abs));
-      const scale = maxVal > 10 ? maxVal / 5 : 1;
-      currentTranslate = [(vals[0] || 0) / scale, (vals[2] || 0) / scale, (vals[1] || 0) / scale];
+      currentTranslate = [vals[0] || 0, vals[2] || 0, vals[1] || 0];
     }
 
-    // Parse rotate
+    // Parse rotate — degrees→radians, swap Y/Z
     const rotateMatch = trimmed.match(/rotate\(\[([^\]]+)\]\)/);
     if (rotateMatch) {
       const vals = rotateMatch[1].split(',').map(v => (parseFloat(v.trim()) || 0) * Math.PI / 180);
       currentRotation = [vals[0] || 0, vals[2] || 0, vals[1] || 0];
     }
 
-    // Parse cube — support both cube([x,y,z]) and cube(size)
+    // Parse cube — RAW dimensions, no per-primitive scaling
     const cubeMatch = trimmed.match(/cube\(\[([^\]]+)\]/) || trimmed.match(/cube\((\d[\d.]*)\)/);
     if (cubeMatch) {
       let dims: number[];
@@ -318,11 +319,10 @@ function extractPrimitives(body: string, moduleName: string, color: string, out:
         const s = parseFloat(cubeMatch[1]) || 1;
         dims = [s, s, s];
       }
-      const maxDim = Math.max(...dims);
-      const scale = maxDim > 8 ? maxDim / 4 : 1;
+      // OpenSCAD: cube([x,y,z]) → Three.js: box(x, z, y) to swap Y/Z
       out.push({
         type: 'cube',
-        args: [(dims[0] || 1) / scale, (dims[2] || dims[0] || 1) / scale, (dims[1] || dims[0] || 1) / scale],
+        args: [dims[0] || 1, dims[2] || dims[0] || 1, dims[1] || dims[0] || 1],
         position: [...currentTranslate],
         rotation: [...currentRotation],
         color: currentColor,
@@ -333,13 +333,12 @@ function extractPrimitives(body: string, moduleName: string, color: string, out:
       currentColor = color;
     }
 
-    // Parse cylinder — multiple syntax variants
+    // Parse cylinder — RAW dimensions
     const cylMatch = trimmed.match(/cylinder\(([^)]+)\)/);
     if (cylMatch && !cubeMatch) {
       const args = cylMatch[1];
       let r = 0.5, r2 = 0.5, h = 1, segments = 24;
 
-      // Named params
       const rMatch = args.match(/(?:^|,|\s)r\s*=\s*([\d.]+)/);
       const r1Match = args.match(/r1\s*=\s*([\d.]+)/);
       const r2Match = args.match(/r2\s*=\s*([\d.]+)/);
@@ -358,17 +357,15 @@ function extractPrimitives(body: string, moduleName: string, color: string, out:
       if (hMatch) h = parseFloat(hMatch[1]);
       if (fnMatch) segments = parseInt(fnMatch[1]);
 
-      // Positional params fallback: cylinder(h, r) or cylinder(h, r1, r2)
       if (!rMatch && !r1Match && !dMatch && !d1Match && !hMatch) {
         const positional = args.split(',').map(v => parseFloat(v.trim())).filter(v => !isNaN(v));
         if (positional.length >= 2) { h = positional[0]; r = r2 = positional[1]; }
         if (positional.length >= 3) { r2 = positional[2]; }
       }
 
-      const scale = Math.max(1, Math.max(r * 2, r2 * 2, h) / 4);
       out.push({
         type: 'cylinder',
-        args: [r / scale, r2 / scale, h / scale, segments],
+        args: [r, r2, h, segments],
         position: [...currentTranslate],
         rotation: [...currentRotation],
         color: currentColor,
@@ -379,7 +376,7 @@ function extractPrimitives(body: string, moduleName: string, color: string, out:
       currentColor = color;
     }
 
-    // Parse sphere
+    // Parse sphere — RAW dimensions
     const sphereMatch = trimmed.match(/sphere\(([^)]+)\)/);
     if (sphereMatch && !cubeMatch && !cylMatch) {
       const args = sphereMatch[1];
@@ -394,10 +391,9 @@ function extractPrimitives(body: string, moduleName: string, color: string, out:
       else { const v = parseFloat(args); if (!isNaN(v)) r = v; }
       if (fnMatch) segs = parseInt(fnMatch[1]);
 
-      const scale = Math.max(1, r / 2);
       out.push({
         type: 'sphere',
-        args: [r / scale, segs, segs],
+        args: [r, segs, segs],
         position: [...currentTranslate],
         rotation: [...currentRotation],
         color: currentColor,
@@ -408,6 +404,60 @@ function extractPrimitives(body: string, moduleName: string, color: string, out:
       currentColor = color;
     }
   }
+}
+
+// Compute uniform scale factor so the entire scene fits in a ~10-unit viewport
+function normalizeScene(primitives: ParsedPrimitive[]): ParsedPrimitive[] {
+  if (primitives.length === 0) return primitives;
+
+  // Compute axis-aligned bounding box of the whole scene
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+
+  for (const p of primitives) {
+    // Estimate extents for each primitive at its position
+    let extX = 0, extY = 0, extZ = 0;
+    if (p.type === 'cube') { extX = p.args[0] / 2; extY = p.args[1] / 2; extZ = p.args[2] / 2; }
+    else if (p.type === 'cylinder') { const r = Math.max(p.args[0], p.args[1]); extX = r; extZ = r; extY = p.args[2] / 2; }
+    else if (p.type === 'sphere') { extX = extY = extZ = p.args[0]; }
+
+    minX = Math.min(minX, p.position[0] - extX);
+    maxX = Math.max(maxX, p.position[0] + extX);
+    minY = Math.min(minY, p.position[1] - extY);
+    maxY = Math.max(maxY, p.position[1] + extY);
+    minZ = Math.min(minZ, p.position[2] - extZ);
+    maxZ = Math.max(maxZ, p.position[2] + extZ);
+  }
+
+  const sizeX = maxX - minX || 1;
+  const sizeY = maxY - minY || 1;
+  const sizeZ = maxZ - minZ || 1;
+  const maxSpan = Math.max(sizeX, sizeY, sizeZ);
+
+  // Target: fit the scene into a ~8 unit box for comfortable viewport viewing
+  const TARGET_SIZE = 8;
+  const scale = maxSpan > 0.01 ? TARGET_SIZE / maxSpan : 1;
+
+  // Center of bounding box
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const cz = (minZ + maxZ) / 2;
+
+  return primitives.map(p => ({
+    ...p,
+    args: p.type === 'cube'
+      ? [p.args[0] * scale, p.args[1] * scale, p.args[2] * scale]
+      : p.type === 'cylinder'
+        ? [p.args[0] * scale, p.args[1] * scale, p.args[2] * scale, p.args[3]]
+        : p.type === 'sphere'
+          ? [p.args[0] * scale, p.args[1], p.args[2]]
+          : p.args,
+    position: [
+      (p.position[0] - cx) * scale,
+      (p.position[1] - cy) * scale,
+      (p.position[2] - cz) * scale,
+    ] as [number, number, number],
+  }));
 }
 
 /* ── Mermaid wiring diagram renderer ─────────────── */
@@ -1333,82 +1383,268 @@ export default function App() {
     return Object.entries(groups).map(([cat, items]) => `${cat}: ${items.join(', ')}`).join('; ');
   };
 
-  // ── Export All Handler ──
-  const handleExportAll = () => {
+  // ── Export All Handler — Rich PDF with rendered visuals ──
+  const handleExportAll = async () => {
     if (!protoProject) { toast.error('No project to export'); return; }
     const p = protoProject;
     const totalCost = p.parts.reduce((s, part) => s + part.price, 0);
+    toast.info('Preparing rich PDF export…');
 
-    const doc = [
-      `# ${p.name || 'Untitled Project'}`,
-      `> Generated by SUBSTRATA by GANTASMO`,
-      `> Date: ${new Date().toISOString().split('T')[0]}`,
-      ``,
-      `## Project Description`,
-      p.description || 'No description provided.',
-      ``,
-      ...(p.designNotes ? [`## Design Notes`, p.designNotes, ``] : []),
-      `## Bill of Materials (${p.parts.length} parts — $${totalCost.toFixed(2)} total)`,
-      ``,
-      `| # | Part | Source | Price | Lead Time | Specs |`,
-      `|---|------|--------|-------|-----------|-------|`,
-      ...p.parts.map((part, i) => `| ${i + 1} | ${part.name} | ${part.source} | $${part.price.toFixed(2)} | ${part.speed} | ${part.specs} |`),
-      ``,
-      ...(p.assemblySteps.length > 0 ? [
-        `## Assembly Instructions`,
-        ...p.assemblySteps.map((step, i) => `${i + 1}. ${step}`),
-        ``
-      ] : []),
-      ...(p.openscadCode && !p.openscadCode.startsWith('//') ? [
-        `## 3D Model (OpenSCAD)`,
-        '```scad',
-        p.openscadCode,
-        '```',
-        ``
-      ] : []),
-      ...(p.svgDesign ? [
-        `## Laser Cut / SVG Design`,
-        '```svg',
-        p.svgDesign,
-        '```',
-        ``
-      ] : []),
-      ...(p.wiringDiagram && p.wiringDiagram !== 'No electronics in this design' ? [
-        `## Wiring Diagram`,
-        '```',
-        p.wiringDiagram,
-        '```',
-        ``
-      ] : []),
-      ...(p.code ? [
-        `## Firmware / Control Code`,
-        '```python',
-        p.code,
-        '```',
-        ``
-      ] : []),
-      ...(p.communityRefs && p.communityRefs.length > 0 ? [
-        `## Community References`,
-        ...p.communityRefs.map(ref => `- ${ref}`),
-        ``
-      ] : []),
-      ...(componentRegistry.length > 0 ? [
-        `## Component Inventory`,
-        ...componentRegistry.map(c => `- **${c.name}** [${c.category}] — ${c.specs}${c.notes ? ` (${c.notes})` : ''}`),
-        ``
-      ] : []),
-      `---`,
-      `*Exported from SUBSTRATA by GANTASMO • gantasmo.ai*`
-    ].join('\n');
+    // ── Render Mermaid wiring diagram to SVG ──
+    let wiringDiagramSvg = '';
+    if (p.wiringDiagram && p.wiringDiagram !== 'No electronics in this design') {
+      const mermaidCode = p.wiringDiagram.split('---')[0].trim();
+      const textSummary = p.wiringDiagram.includes('---') ? p.wiringDiagram.split('---').slice(1).join('---').trim() : '';
+      try {
+        const { svg } = await mermaid.render(`export-wiring-${Date.now()}`, mermaidCode);
+        wiringDiagramSvg = svg;
+      } catch { wiringDiagramSvg = ''; }
+      if (textSummary) {
+        wiringDiagramSvg += `<div class="wiring-text">${textSummary.replace(/\n/g, '<br/>')}</div>`;
+      }
+    }
 
-    const blob = new Blob([doc], { type: 'text/markdown' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${(p.name || 'project').replace(/[^a-zA-Z0-9]/g, '_')}_full_export.md`;
-    a.click();
-    URL.revokeObjectURL(url);
-    toast.success('Full project exported as Markdown!');
+    // ── Split and render SVG designs ──
+    let svgDesignHtml = '';
+    if (p.svgDesign) {
+      const parts = p.svgDesign.split(/<!--\s*PART_BREAK\s*-->/i).filter(s => s.trim());
+      svgDesignHtml = parts.map((svgPart, i) => {
+        const sanitized = sanitizeSvg(svgPart.trim());
+        return `<div class="svg-part"><h4>Part ${i + 1}</h4><div class="svg-render">${sanitized}</div></div>`;
+      }).join('');
+    }
+
+    // ── Generate assembly step visuals ──
+    let assemblyHtml = '';
+    if (p.assemblySteps.length > 0) {
+      assemblyHtml = p.assemblySteps.map((step, i) => {
+        // Find which parts are mentioned in this step
+        const mentionedParts = p.parts.filter(part =>
+          step.toLowerCase().includes(part.name.toLowerCase())
+        );
+        const partBadges = mentionedParts.map(pp =>
+          `<span class="part-badge">${pp.name}</span>`
+        ).join('');
+        return `<div class="assembly-step">
+          <div class="step-number">${i + 1}</div>
+          <div class="step-content">
+            <p>${step}</p>
+            ${partBadges ? `<div class="step-parts">Parts: ${partBadges}</div>` : ''}
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    // ── Generate 3D parts reference diagram (SVG schematic of parsed geometry) ──
+    let partsLayoutSvg = '';
+    if (p.openscadCode && !p.openscadCode.startsWith('//')) {
+      const primitives = parseOpenSCAD(p.openscadCode);
+      if (primitives.length > 0) {
+        // Create a top-down schematic of all parts with labels
+        const svgW = 600, svgH = 400;
+        const shapes = primitives.map((prim, i) => {
+          // Map 3D positions to 2D layout (XZ top-down view)
+          const x = svgW / 2 + prim.position[0] * 30;
+          const y = svgH / 2 + prim.position[2] * 30;
+          const size = prim.type === 'sphere' ? prim.args[0] * 20
+            : prim.type === 'cylinder' ? Math.max(prim.args[0], prim.args[1]) * 20
+            : Math.max(prim.args[0], prim.args[2]) * 10;
+          const displaySize = Math.max(8, Math.min(size, 80));
+
+          if (prim.type === 'cylinder' || prim.type === 'sphere') {
+            return `<circle cx="${x}" cy="${y}" r="${displaySize}" fill="${prim.color}22" stroke="${prim.color}" stroke-width="2"/>
+              <text x="${x}" y="${y + displaySize + 14}" text-anchor="middle" fill="#333" font-size="10">${prim.label}</text>`;
+          }
+          return `<rect x="${x - displaySize}" y="${y - displaySize / 2}" width="${displaySize * 2}" height="${displaySize}" fill="${prim.color}22" stroke="${prim.color}" stroke-width="2" rx="3"/>
+            <text x="${x}" y="${y + displaySize / 2 + 14}" text-anchor="middle" fill="#333" font-size="10">${prim.label}</text>`;
+        }).join('\n');
+        partsLayoutSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${svgW} ${svgH}" width="100%" height="auto" style="max-height:400px">
+          <text x="${svgW / 2}" y="20" text-anchor="middle" fill="#0066cc" font-size="14" font-weight="bold">Parts Layout — Top-Down View</text>
+          <line x1="50" y1="${svgH / 2}" x2="${svgW - 50}" y2="${svgH / 2}" stroke="#ddd" stroke-dasharray="4"/>
+          <line x1="${svgW / 2}" y1="30" x2="${svgW / 2}" y2="${svgH - 20}" stroke="#ddd" stroke-dasharray="4"/>
+          ${shapes}
+        </svg>`;
+      }
+    }
+
+    // ── Build the full HTML document ──
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>${p.name || 'Project'} — SUBSTRATA Export</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; color: #222; line-height: 1.7; padding: 2rem; max-width: 960px; margin: 0 auto; }
+  h1 { color: #0066cc; font-size: 1.8rem; margin: 0 0 0.5rem; border-bottom: 3px solid #0066cc; padding-bottom: 0.5rem; }
+  h2 { color: #0066cc; font-size: 1.3rem; margin: 2rem 0 0.8rem; border-bottom: 1px solid #e0e0e0; padding-bottom: 0.3rem; }
+  h3 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; color: #333; }
+  h4 { font-size: 0.95rem; margin: 0.5rem 0; color: #555; }
+  p { margin-bottom: 0.7rem; }
+  .meta { color: #666; font-size: 0.85rem; margin-bottom: 1.5rem; }
+  .meta span { display: inline-block; margin-right: 1.5rem; }
+
+  /* BOM Table */
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.85rem; }
+  th { background: #f0f8ff; color: #0066cc; font-weight: 600; text-align: left; padding: 0.5rem 0.6rem; border: 1px solid #ddd; }
+  td { padding: 0.4rem 0.6rem; border: 1px solid #ddd; }
+  tr:nth-child(even) { background: #fafafa; }
+  .total-row { font-weight: 700; background: #f0f8ff !important; }
+
+  /* Assembly Steps */
+  .assembly-step { display: flex; gap: 1rem; margin: 0.75rem 0; align-items: flex-start; }
+  .step-number { flex-shrink: 0; width: 32px; height: 32px; background: #0066cc; color: #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.85rem; }
+  .step-content { flex: 1; padding-top: 0.2rem; }
+  .step-parts { margin-top: 0.3rem; }
+  .part-badge { display: inline-block; background: #e8f4fd; color: #0066cc; padding: 0.1rem 0.5rem; border-radius: 12px; font-size: 0.75rem; margin: 0.1rem 0.2rem; border: 1px solid #b3d9f2; }
+
+  /* Wiring Diagram */
+  .wiring-container { margin: 1.5rem 0; background: #fafafa; border: 1px solid #e0e0e0; border-radius: 8px; padding: 1.5rem; text-align: center; }
+  .wiring-container svg { max-width: 100%; height: auto; }
+  .wiring-text { text-align: left; margin-top: 1rem; font-size: 0.85rem; color: #555; white-space: pre-line; }
+
+  /* SVG Parts */
+  .svg-part { margin: 1rem 0; border: 1px solid #e0e0e0; border-radius: 8px; padding: 1rem; background: #fafafa; }
+  .svg-render { display: flex; justify-content: center; }
+  .svg-render svg { max-width: 100%; max-height: 300px; }
+
+  /* Parts Layout */
+  .parts-layout { margin: 1.5rem 0; border: 1px solid #e0e0e0; border-radius: 8px; padding: 1rem; background: #fff; text-align: center; }
+
+  /* Code blocks */
+  pre { background: #f5f5f5; border: 1px solid #e0e0e0; border-radius: 6px; padding: 1rem; overflow-x: auto; margin: 1rem 0; font-size: 0.8rem; line-height: 1.5; }
+  code { font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace; }
+
+  /* Design Reference */
+  .design-ref { background: #f8f9fa; border-left: 4px solid #0066cc; padding: 1rem 1.2rem; margin: 1rem 0; font-size: 0.85rem; }
+  .design-ref h4 { color: #0066cc; margin-bottom: 0.3rem; }
+  .design-ref ul { padding-left: 1.2rem; margin: 0.3rem 0; }
+  .design-ref li { margin-bottom: 0.15rem; }
+
+  /* Community refs */
+  .community-ref { margin: 0.3rem 0; }
+
+  /* Footer */
+  .footer { margin-top: 3rem; border-top: 2px solid #e0e0e0; padding-top: 1rem; text-align: center; color: #999; font-size: 0.8rem; }
+
+  @page { margin: 1.5cm; size: A4; }
+  @media print {
+    body { padding: 0; }
+    h2 { page-break-after: avoid; }
+    .assembly-step { page-break-inside: avoid; }
+    table { page-break-inside: auto; }
+    tr { page-break-inside: avoid; }
+    pre { page-break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+
+<h1>${p.name || 'Untitled Project'}</h1>
+<div class="meta">
+  <span>Generated by <strong>SUBSTRATA by GANTASMO</strong></span>
+  <span>Date: ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</span>
+  <span>Parts: ${p.parts.length}</span>
+  <span>Est. Cost: $${totalCost.toFixed(2)}</span>
+</div>
+
+<h2>Project Overview</h2>
+<p>${(p.description || 'No description provided.').replace(/\n/g, '<br/>')}</p>
+${p.designNotes ? `<h3>Design Notes</h3><p>${p.designNotes.replace(/\n/g, '<br/>')}</p>` : ''}
+
+<h2>Bill of Materials (${p.parts.length} parts)</h2>
+<table>
+  <thead><tr><th>#</th><th>Part</th><th>Source</th><th>Price</th><th>Lead Time</th><th>Specifications</th></tr></thead>
+  <tbody>
+    ${p.parts.map((part, i) => `<tr><td>${i + 1}</td><td><strong>${part.name}</strong></td><td>${part.source}</td><td>$${part.price.toFixed(2)}</td><td>${part.speed}</td><td>${part.specs}</td></tr>`).join('\n    ')}
+    <tr class="total-row"><td colspan="3">TOTAL</td><td>$${totalCost.toFixed(2)}</td><td colspan="2">${p.parts.length} components</td></tr>
+  </tbody>
+</table>
+
+${assemblyHtml ? `<h2>Assembly Instructions</h2>${assemblyHtml}` : ''}
+
+${wiringDiagramSvg ? `<h2>Wiring / Circuit Diagram</h2><div class="wiring-container">${wiringDiagramSvg}</div>` : ''}
+
+${svgDesignHtml ? `<h2>Laser-Cut / SVG Design Sheets</h2>${svgDesignHtml}` : ''}
+
+${partsLayoutSvg ? `<h2>3D Parts Layout</h2><div class="parts-layout">${partsLayoutSvg}</div>` : ''}
+
+${p.openscadCode && !p.openscadCode.startsWith('//') ? `<h2>3D Model (OpenSCAD Source)</h2><pre><code>${p.openscadCode.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></pre>` : ''}
+
+${p.code ? `<h2>Firmware / Control Code</h2><pre><code>${p.code.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></pre>` : ''}
+
+${p.communityRefs && p.communityRefs.length > 0 ? `<h2>Community References</h2>${p.communityRefs.map(ref => `<div class="community-ref">• ${ref}</div>`).join('\n')}` : ''}
+
+${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
+  <thead><tr><th>Component</th><th>Category</th><th>Specs</th></tr></thead>
+  <tbody>${componentRegistry.map(c => `<tr><td><strong>${c.name}</strong></td><td>${c.category}</td><td>${c.specs}${c.notes ? ` — ${c.notes}` : ''}</td></tr>`).join('\n')}</tbody>
+</table>` : ''}
+
+<h2>Design Reference Guide</h2>
+<div class="design-ref">
+  <h4>3D Printing DFM</h4>
+  <ul>
+    <li>Min wall: 1.2mm FDM, 0.8mm SLA</li>
+    <li>Overhang limit: 45° without supports</li>
+    <li>Hole tolerance: 0.2–0.4mm undersized, ream to fit</li>
+    <li>Screw bosses: Use heat-set brass inserts (M3 = 4.0mm hole)</li>
+    <li>Snap fits: 1–2mm deflection; PETG for flex fatigue</li>
+  </ul>
+</div>
+<div class="design-ref">
+  <h4>Laser Cutting DFM</h4>
+  <ul>
+    <li>Kerf: ~0.1–0.2mm/side for diode on wood</li>
+    <li>Tab-and-slot: 0.1mm interference for press-fit</li>
+    <li>Max cut: ~3mm balsa, ~2mm MDF (multi-pass)</li>
+    <li>NEVER cut PVC/vinyl (toxic gas)</li>
+  </ul>
+</div>
+<div class="design-ref">
+  <h4>Electronics Design Rules</h4>
+  <ul>
+    <li>100nF ceramic decoupling on every IC VCC</li>
+    <li>Never power servos from MCU/USB — use separate BEC</li>
+    <li>Flyback diodes on all motor/relay coils</li>
+    <li>ESP32 is 3.3V logic — use level shifters for 5V</li>
+    <li>I2C: 4.7kΩ pull-ups on SDA/SCL (per bus)</li>
+  </ul>
+</div>
+<div class="design-ref">
+  <h4>Mechanical Design</h4>
+  <ul>
+    <li>Gear module 1.0–2.0 for 3D printed, min 12 teeth</li>
+    <li>Fastener engagement: ≥1.5× diameter (metal), 2× (plastic)</li>
+    <li>Use rubber grommets / TPU dampers for motor mounts</li>
+    <li>Bearing: 608ZZ general, 6001ZZ heavier loads</li>
+  </ul>
+</div>
+
+<div class="footer">
+  <p>Exported from SUBSTRATA by GANTASMO • ${new Date().toISOString().split('T')[0]}</p>
+  <p>All dimensions in millimeters unless noted. Verify critical dimensions before fabrication.</p>
+</div>
+
+<script>window.onload = function() { setTimeout(function() { window.print(); }, 300); }<\/script>
+</body>
+</html>`;
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      // Fallback: download as HTML if popup blocked
+      const blob = new Blob([html], { type: 'text/html' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${(p.name || 'project').replace(/[^a-zA-Z0-9]/g, '_')}_full_export.html`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success('Exported as HTML (enable popups for direct PDF)');
+      return;
+    }
+    printWindow.document.write(html);
+    printWindow.document.close();
+    toast.success('PDF export ready — use the print dialog to save as PDF');
   };
 
   // Sorted parts memo for BOM
@@ -2820,8 +3056,8 @@ export default function App() {
                     <div className="p-2 glass-panel border-white/10 space-y-2.5">
                       <div className="space-y-1">
                         <Label className="text-[9px] font-bold uppercase tracking-widest text-white/40">Preset Size</Label>
-                        <Select onValueChange={(key) => {
-                          const preset = LABEL_SIZE_PRESETS[key];
+                        <Select onValueChange={(key: string) => {
+                          const preset = LABEL_SIZE_PRESETS[key as keyof typeof LABEL_SIZE_PRESETS];
                           if (preset) setLabelSettings(s => ({ ...s, labelWidth: preset.width, labelHeight: preset.height }));
                         }}>
                           <SelectTrigger className="glass-input border-white/10 bg-black/20 h-8 text-[10px]"><SelectValue placeholder="Select label size" /></SelectTrigger>

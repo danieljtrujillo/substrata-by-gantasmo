@@ -288,6 +288,48 @@ export async function transcribeSpokenPrompt(audioBase64: string) {
 // ── Enhanced Blueprint Generation ─────────────────────────────
 // Generates full prototype blueprints with actual design files
 
+// ── OpenSCAD Validation ──────────────────────────────────────
+// Post-generation checks to ensure 3D code quality
+
+function validateAndFixOpenSCAD(code: string): { code: string; warnings: string[] } {
+  const warnings: string[] = [];
+  let fixed = code;
+
+  // Check for modules with no primitives
+  const moduleRegex = /module\s+(\w+)\s*\([^)]*\)\s*\{/g;
+  let match;
+  while ((match = moduleRegex.exec(code)) !== null) {
+    const name = match[1];
+    let depth = 1;
+    let pos = match.index + match[0].length;
+    const start = pos;
+    while (pos < code.length && depth > 0) {
+      if (code[pos] === '{') depth++;
+      else if (code[pos] === '}') depth--;
+      pos++;
+    }
+    const body = code.slice(start, pos - 1);
+    if (!/cube|cylinder|sphere|linear_extrude|rotate_extrude|polyhedron/.test(body)) {
+      warnings.push(`Module "${name}" has no geometry primitives`);
+    }
+  }
+
+  // Check for unrealistic dimensions (< 0.1mm or > 2000mm)
+  const dimRegex = /(?:cube\(\[|cylinder\(.*?(?:r|h|d)\s*=\s*|sphere\(.*?(?:r|d)\s*=\s*)([\d.]+)/g;
+  while ((match = dimRegex.exec(code)) !== null) {
+    const dim = parseFloat(match[1]);
+    if (dim > 0 && dim < 0.1) warnings.push(`Very small dimension (${dim}mm) found — may be a unit error`);
+    if (dim > 2000) warnings.push(`Very large dimension (${dim}mm) found — may be a unit error`);
+  }
+
+  // Ensure assembly module exists
+  if (!/module\s+assembly\s*\(/.test(code)) {
+    warnings.push('No assembly() module found — parts may not be positioned relative to each other');
+  }
+
+  return { code: fixed, warnings };
+}
+
 export async function generateProjectBlueprint(
   prompt: string,
   designStyle: string,
@@ -317,6 +359,17 @@ When generating a blueprint:
 6. Generate REAL firmware/control code (Arduino/MicroPython) that compiles
 7. Provide step-by-step assembly instructions
 8. Consider tolerances, interference fits, and DFM rules
+
+CRITICAL 3D DESIGN RULES:
+- ALL dimensions MUST be in millimeters (mm) — this is the only unit system
+- Define shared interface dimensions as variables at the top (e.g. screw_d=3, wall=2.5, pcb_w=50)
+- Parts that connect MUST share the same mounting hole positions and mating surface dimensions
+- Use translate() to position parts relative to each other in the assembly() module
+- For clearance fits: holes = shaft_diameter + 0.3mm (FDM)
+- For press fits: hole = shaft_diameter - 0.2mm (FDM)
+- Keep all parts within a realistic scale (most hobby projects: 20-300mm per axis)
+- Always define origin consistently: front-left-bottom corner or center-bottom
+- Every primitive MUST have explicit numeric dimensions, never hardcode 1 or 0.5 as placeholder
 `;
 
   const contextSection = advisorContext 
@@ -372,7 +425,7 @@ Return exactly as JSON.`;
               required: ["name", "source", "price", "speed", "category"]
             }
           },
-          openscadCode: { type: Type.STRING, description: "Complete OpenSCAD code for ALL 3D-printable custom parts. Each part as a module with translate(), rotate(), cube(), cylinder(), sphere() calls using NAMED PARAMETERS (e.g. cube([w,d,h]), cylinder(r=5, h=10), sphere(r=3)). Use varied shapes, rounded edges (cylinder for fillets), and realistic proportions. Include an assembly() module that positions all parts together. Use difference() for holes and cutouts. CRITICAL: every module MUST contain at least one primitive (cube/cylinder/sphere) with explicit numeric dimensions." },
+          openscadCode: { type: Type.STRING, description: "Complete OpenSCAD code for ALL 3D-printable custom parts. ALL DIMENSIONS IN MILLIMETERS. Define shared variables at top (e.g. wall_t=2.5, screw_d=3, pcb_width=50). Each part as a named module. Use translate(), rotate(), cube([w,d,h]), cylinder(r=R, h=H), sphere(r=R) with NAMED parameters. Mating parts MUST share interface dimensions — mounting holes, slot widths, and surface sizes must match between parts that connect. Use difference() for holes/cutouts. Include intersection/clearance checks: holes for M3 screws = 3.3mm diameter, press-fit pins = diameter-0.2mm. Include an assembly() module that places all parts using translate() at their real positions. Every module MUST contain at least one primitive with real mm dimensions (no placeholders). Typical scale: individual parts 10-200mm per axis. Use color() to differentiate parts visually." },
           svgDesign: { type: Type.STRING, description: "Generate MULTIPLE SVG drawings separated by <!--PART_BREAK--> comments. Each part SVG should be a complete <svg> element with viewBox, containing the 2D profile/cutline for ONE part. Include a <title> element with the part name. Use <rect>, <circle>, <path>, <line> elements with real dimensions in mm. Use stroke='red' for cut lines, stroke='blue' for engrave lines. Example: <svg viewBox='0 0 100 50'><title>Base Plate</title>...</svg><!--PART_BREAK--><svg viewBox='0 0 60 60'><title>Side Panel</title>...</svg>" },
           wiringDiagram: { type: Type.STRING, description: "Generate a Mermaid flowchart diagram showing ALL wiring connections. Use 'graph LR' or 'graph TD'. Each component is a node, each wire is an edge with the pin names as labels. Example: graph LR; Arduino[Arduino Uno] -->|D9 PWM| MotorDriver[L298N]; MotorDriver -->|OUT1/OUT2| Motor[Nema 17]; PSU[12V PSU] -->|VIN| MotorDriver; PSU -->|5V reg| Arduino; Also include a text summary after the mermaid block preceded by '---TEXT---' showing pin-by-pin connections." },
           assemblySteps: {
@@ -396,7 +449,19 @@ Return exactly as JSON.`;
     }
   }));
 
-  return JSON.parse(response.text);
+  const result = JSON.parse(response.text);
+
+  // Validate and log warnings for the generated OpenSCAD code
+  if (result.openscadCode) {
+    const { warnings } = validateAndFixOpenSCAD(result.openscadCode);
+    if (warnings.length > 0) {
+      console.warn('[SUBSTRATA] OpenSCAD validation warnings:', warnings);
+      result.designNotes = (result.designNotes || '') + 
+        '\n\n⚠️ 3D Model Notes: ' + warnings.join('. ') + '.';
+    }
+  }
+
+  return result;
 }
 
 // ── Parametric Variant Generation ─────────────────────────────
