@@ -385,3 +385,170 @@ linear_extrude(height = ${extrudeHeight}, center = false, convexity = 10) {
     img.src = imageSource;
   });
 };
+
+/**
+ * Generate a displacement-based 3D mesh from an image.
+ * Converts image brightness to height (like Blender's displace modifier).
+ * Returns OpenSCAD code that uses polyhedron for a displacement surface,
+ * plus a Three.js-compatible displacement map for real-time preview.
+ * 
+ * Inspired by headless-Blender workflows that subdivide a plane and 
+ * displace vertices based on a grayscale depthmap.
+ */
+export const generateDisplacementMesh = (
+  imageSource: string,
+  options: {
+    scaleMm?: number;    // width in mm (default 50)
+    maxHeight?: number;  // max displacement height in mm (default 10)
+    resolution?: number; // grid subdivisions per side (default 40, max 80)
+    invert?: boolean;    // invert depth (dark = high)
+    mirror?: boolean;    // mirror Z for double-sided relief
+  } = {}
+): Promise<{
+  openscad: string;
+  displacementData: number[]; // flat array of normalized heights [0-1], row-major
+  gridWidth: number;
+  gridHeight: number;
+  boundingBox: { width: number; height: number; depth: number };
+  vertexCount: number;
+  faceCount: number;
+}> => {
+  const {
+    scaleMm = 50,
+    maxHeight = 10,
+    resolution = 40,
+    invert = false,
+    mirror = false,
+  } = options;
+
+  const res = Math.min(Math.max(resolution, 8), 80);
+
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = res;
+      canvas.height = res;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return reject('Canvas context unavailable');
+
+      // Draw scaled to grid resolution
+      ctx.drawImage(img, 0, 0, res, res);
+      const { data } = ctx.getImageData(0, 0, res, res);
+
+      // Extract normalized height values from brightness
+      const heights: number[] = [];
+      for (let i = 0; i < data.length; i += 4) {
+        const luma = (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]) / 255;
+        heights.push(invert ? 1 - luma : luma);
+      }
+
+      // Compute grid dimensions in mm
+      const aspect = img.naturalWidth / img.naturalHeight;
+      const gridW = aspect >= 1 ? scaleMm : scaleMm * aspect;
+      const gridH = aspect >= 1 ? scaleMm / aspect : scaleMm;
+      const cellW = gridW / (res - 1);
+      const cellH = gridH / (res - 1);
+
+      // Generate vertices
+      const verts: string[] = [];
+      for (let row = 0; row < res; row++) {
+        for (let col = 0; col < res; col++) {
+          const x = col * cellW;
+          const y = row * cellH;
+          const z = heights[row * res + col] * maxHeight;
+          verts.push(`[${x.toFixed(3)}, ${y.toFixed(3)}, ${z.toFixed(3)}]`);
+        }
+      }
+
+      // Add base vertices (z=0) for a solid mesh
+      const baseOffset = res * res;
+      for (let row = 0; row < res; row++) {
+        for (let col = 0; col < res; col++) {
+          const x = col * cellW;
+          const y = row * cellH;
+          verts.push(`[${x.toFixed(3)}, ${y.toFixed(3)}, 0]`);
+        }
+      }
+
+      // Generate faces (triangulated quads)
+      const faces: string[] = [];
+      for (let row = 0; row < res - 1; row++) {
+        for (let col = 0; col < res - 1; col++) {
+          const tl = row * res + col;
+          const tr = tl + 1;
+          const bl = (row + 1) * res + col;
+          const br = bl + 1;
+          // Top surface (CCW for OpenSCAD)
+          faces.push(`[${tl}, ${bl}, ${br}]`);
+          faces.push(`[${tl}, ${br}, ${tr}]`);
+          // Bottom surface
+          faces.push(`[${baseOffset + tl}, ${baseOffset + tr}, ${baseOffset + br}]`);
+          faces.push(`[${baseOffset + tl}, ${baseOffset + br}, ${baseOffset + bl}]`);
+        }
+      }
+      // Side walls
+      for (let col = 0; col < res - 1; col++) {
+        // Front edge (row=0)
+        faces.push(`[${col}, ${col + 1}, ${baseOffset + col + 1}]`);
+        faces.push(`[${col}, ${baseOffset + col + 1}, ${baseOffset + col}]`);
+        // Back edge (row=res-1)
+        const bRow = (res - 1) * res;
+        faces.push(`[${bRow + col}, ${baseOffset + bRow + col}, ${baseOffset + bRow + col + 1}]`);
+        faces.push(`[${bRow + col}, ${baseOffset + bRow + col + 1}, ${bRow + col + 1}]`);
+      }
+      for (let row = 0; row < res - 1; row++) {
+        // Left edge (col=0)
+        const l0 = row * res;
+        const l1 = (row + 1) * res;
+        faces.push(`[${l0}, ${baseOffset + l0}, ${baseOffset + l1}]`);
+        faces.push(`[${l0}, ${baseOffset + l1}, ${l1}]`);
+        // Right edge (col=res-1)
+        const r0 = row * res + res - 1;
+        const r1 = (row + 1) * res + res - 1;
+        faces.push(`[${r0}, ${r1}, ${baseOffset + r1}]`);
+        faces.push(`[${r0}, ${baseOffset + r1}, ${baseOffset + r0}]`);
+      }
+
+      const vertexCount = verts.length;
+      const faceCount = faces.length;
+
+      let openscad = `// Displacement mesh from image (${res}×${res} grid)
+// Bounding box: ${gridW.toFixed(1)}mm × ${gridH.toFixed(1)}mm × ${maxHeight}mm
+// Vertices: ${vertexCount}, Faces: ${faceCount}
+
+polyhedron(
+  points = [
+    ${verts.join(',\n    ')}
+  ],
+  faces = [
+    ${faces.join(',\n    ')}
+  ],
+  convexity = 10
+);`;
+
+      if (mirror) {
+        openscad = `// Double-sided relief (mirrored on Z)
+union() {
+  ${openscad.split('\n').map(l => '  ' + l).join('\n')}
+
+  mirror([0, 0, 1])
+  ${openscad.split('\n').map(l => '  ' + l).join('\n')}
+}`;
+      }
+
+      resolve({
+        openscad,
+        displacementData: heights,
+        gridWidth: res,
+        gridHeight: res,
+        boundingBox: { width: gridW, height: gridH, depth: mirror ? maxHeight * 2 : maxHeight },
+        vertexCount,
+        faceCount,
+      });
+    };
+    img.onerror = reject;
+    img.src = imageSource;
+  });
+};

@@ -113,7 +113,7 @@ import {
   DropdownMenuTrigger,
   DropdownMenuSeparator
 } from "@/components/ui/dropdown-menu";
-import { processImageForLaser, ImageProcessOptions, generateEdgeSilhouette, extractProfileForExtrusion } from './lib/imageProcessor';
+import { processImageForLaser, ImageProcessOptions, generateEdgeSilhouette, extractProfileForExtrusion, generateDisplacementMesh } from './lib/imageProcessor';
 import { 
   generateLaserDesign, 
   consultLaserExpert, 
@@ -1847,6 +1847,42 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
     }
   }
 
+  const handleDisplacementMesh = async () => {
+    const src = conceptSketchImage || referenceImage || originalImage;
+    if (!src) { toast.error('Load or generate an image first'); return; }
+    try {
+      toast.info('Generating displacement mesh from image...');
+      const result = await generateDisplacementMesh(src, {
+        scaleMm: 50,
+        maxHeight: 10,
+        resolution: 40,
+        invert: false,
+        mirror: true,
+      });
+      const newProject: PrototypeProject = {
+        id: `displace_${Date.now()}`,
+        name: 'Displacement Relief',
+        description: `Depth-based relief from image (${result.vertexCount} vertices, ${result.faceCount} faces, ${result.boundingBox.width.toFixed(1)}×${result.boundingBox.height.toFixed(1)}×${result.boundingBox.depth.toFixed(1)}mm)`,
+        designNotes: 'Generated using image-to-mesh displacement (similar to Blender depthmap extrusion). The bright areas are raised and dark areas recessed. Edit maxHeight and resolution in the OpenSCAD code.',
+        parts: [],
+        openscadCode: result.openscad,
+        svgDesign: '',
+        wiringDiagram: '',
+        assemblySteps: ['Review displacement mesh in 3D viewport', 'Adjust height and resolution if needed', 'Export as STL for 3D printing or CNC'],
+        code: '',
+        printingFiles: [],
+        communityRefs: [],
+        status: 'ready'
+      };
+      setProtoProject(newProject);
+      setEngineeringMode('prototype');
+      setActiveOutputTab('3d');
+      toast.success(`Displacement mesh: ${result.vertexCount} verts, ${result.boundingBox.width.toFixed(1)}×${result.boundingBox.height.toFixed(1)}×${result.boundingBox.depth.toFixed(1)}mm`);
+    } catch (error) {
+      toast.error('Displacement mesh generation failed');
+    }
+  }
+
   return (
     <div className="flex flex-col overflow-hidden bg-transparent text-white font-sans selection:bg-laser-accent selection:text-black" style={{ height: '100dvh' }}>
       {/* Advanced Editor Modal */}
@@ -2413,6 +2449,72 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
         {/* ─── CENTER: Viewport + Output Tabs ─── */}
         <div className="flex-1 flex flex-col overflow-hidden">
 
+          {/* ─── TOP: Output Tabs (viewport header) ─── */}
+          {engineeringMode === 'prototype' && (
+            <div className="shrink-0 border-b border-white/10 bg-black/30">
+              <div className="h-8 px-3 flex items-center gap-1 overflow-x-auto">
+                {[
+                  { id: '3d', label: '3D Viewport', icon: Box, ready: true, tip: 'View and rotate the 3D model' },
+                  { id: 'bom', label: 'BOM', icon: ListTodo, ready: !!protoProject, tip: 'Bill of Materials — parts list and sourcing' },
+                  { id: 'fabrication', label: 'Design Files', icon: FileCode, ready: !!protoProject, tip: 'SVG files, wiring diagrams, and technical drawings' },
+                  { id: 'code', label: 'Code', icon: Terminal, ready: !!protoProject, tip: 'Machine-readable code for 3D printing or laser cutting' },
+                  { id: 'assembly', label: 'Assembly', icon: ClipboardList, ready: !!(protoProject && protoProject.assemblySteps.length > 0), tip: 'Step-by-step instructions for putting it together' },
+                ].map(tab => (
+                  <button key={tab.id} onClick={() => tab.ready && setActiveOutputTab(tab.id)} title={tab.tip}
+                    className={`flex items-center gap-1.5 px-2.5 py-1 text-[9px] font-bold uppercase tracking-widest rounded transition-all whitespace-nowrap
+                      ${activeOutputTab === tab.id ? 'bg-white/10 text-blue-400' : tab.ready ? 'text-white/40 hover:text-white/60 hover:bg-white/5' : 'text-white/15 cursor-not-allowed'}`}>
+                    <tab.icon className="w-3 h-3" />
+                    {tab.label}
+                    {isProtoGenerating && !tab.ready && <RefreshCw className="w-2.5 h-2.5 animate-spin ml-1" />}
+                  </button>
+                ))}
+                <div className="flex-1" />
+                {/* Estimates bar */}
+                {protoProject && (
+                  <div className="flex items-center gap-3 text-[9px] font-mono text-white/40 mr-2">
+                    <span title="Estimated polygon count from parsed primitives"><Box className="w-3 h-3 inline mr-0.5" />{(() => {
+                      const code = protoProject.openscadCode || '';
+                      let polys = 0;
+                      const cubes = (code.match(/cube\s*\(/g) || []).length;
+                      const cyls = (code.match(/cylinder\s*\(/g) || []).length;
+                      const spheres = (code.match(/sphere\s*\(/g) || []).length;
+                      const extrudes = (code.match(/linear_extrude/g) || []).length;
+                      polys += cubes * 12 + cyls * 64 + spheres * 960 + extrudes * 200;
+                      if (polys === 0) polys = protoProject.parts.length * 48;
+                      return polys > 1000 ? `~${(polys / 1000).toFixed(1)}k` : `~${polys}`;
+                    })()} polys</span>
+                    <span title={`Estimated print time on ${selectedPrinter}`}><Printer className="w-3 h-3 inline mr-0.5" />{(() => {
+                      const p = PRINTER_DATABASE[selectedPrinter];
+                      if (!p) return '—';
+                      const vol = p.buildVolume.split('×').map(s => parseFloat(s));
+                      const partCount = protoProject.parts.filter(pt => pt.fabrication === '3d_print').length || Math.max(1, (protoProject.openscadCode.match(/module\s+\w+/g) || []).length);
+                      const isResin = p.type.includes('Resin') || p.type.includes('MSLA');
+                      const minPerPart = isResin ? 25 : 40;
+                      const totalMin = partCount * minPerPart;
+                      return totalMin >= 60 ? `~${(totalMin / 60).toFixed(1)}h` : `~${totalMin}m`;
+                    })()}</span>
+                    {protoProject.svgDesign && (
+                      <span title={`Estimated laser cut time on ${selectedLaser}`}><Zap className="w-3 h-3 inline mr-0.5" />{(() => {
+                        const l = LASER_DATABASE[selectedLaser];
+                        if (!l) return '—';
+                        const partCount = (protoProject.svgDesign.match(/PART_BREAK/g) || []).length + 1;
+                        const speed = parseInt(l.workArea) || 130;
+                        const minPerPart = Math.max(2, Math.round(speed / 30));
+                        const totalMin = partCount * minPerPart;
+                        return `~${totalMin}m`;
+                      })()}</span>
+                    )}
+                  </div>
+                )}
+                {protoProject && (
+                  <Button size="sm" className="h-6 text-[9px] bg-blue-600 hover:bg-blue-500 text-white" onClick={handleExportAll} title="Download everything as one organized document">
+                    <FileDown className="w-3 h-3 mr-1" /> Export
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Main Viewport Area */}
           <div className="flex-1 relative overflow-hidden">
             {/* Laser Studio viewport */}
@@ -2538,9 +2640,13 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
                       onClick={() => setShowConceptPanel(true)}>
                       <PenTool className="w-3.5 h-3.5" />
                     </Button>
-                    <Button size="icon" variant="ghost" className="h-7 w-7 text-white/60 hover:text-white" title="Turn a flat image into a 3D shape"
+                    <Button size="icon" variant="ghost" className="h-7 w-7 text-white/60 hover:text-white" title="Turn a flat image into a 3D shape (profile extrusion)"
                       onClick={handleExtrudeFromImage} disabled={!originalImage && !conceptSketchImage && !referenceImage}>
                       <Box className="w-3.5 h-3.5" />
+                    </Button>
+                    <Button size="icon" variant="ghost" className="h-7 w-7 text-amber-400 hover:text-amber-300" title="Generate displacement relief mesh from image (depth-based 2D→3D)"
+                      onClick={handleDisplacementMesh} disabled={!originalImage && !conceptSketchImage && !referenceImage}>
+                      <Layers className="w-3.5 h-3.5" />
                     </Button>
                     <Button size="icon" variant="ghost" className="h-7 w-7 text-green-400 hover:text-green-300" title="Download 3D model as STL file for printing"
                       onClick={handleExportSTL} disabled={!protoProject}>
@@ -2676,36 +2782,10 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
               </div>
             </div>
           </div>
-          </div>
 
-          {/* ─── BOTTOM: Output Tabs (progressive reveal) ─── */}
-          <div className="shrink-0 border-t border-white/10 bg-black/30">
-            {/* Tab bar */}
-            <div className="h-9 px-3 flex items-center gap-1 border-b border-white/5 overflow-x-auto">
-              {[
-                { id: '3d', label: '3D Workspace', icon: Box, ready: true, tip: 'View and rotate the 3D model' },
-                { id: 'bom', label: 'Bill of Materials', icon: ListTodo, ready: !!protoProject, tip: 'List of all parts needed and where to buy them' },
-                { id: 'fabrication', label: 'Design Files', icon: FileCode, ready: !!protoProject, tip: 'SVG files, wiring diagrams, and technical drawings' },
-                { id: 'code', label: 'Control Code', icon: Terminal, ready: !!protoProject, tip: 'Machine-readable code for 3D printing or laser cutting' },
-                { id: 'assembly', label: 'Assembly', icon: ClipboardList, ready: !!(protoProject && protoProject.assemblySteps.length > 0), tip: 'Step-by-step instructions for putting it together' },
-              ].map(tab => (
-                <button key={tab.id} onClick={() => tab.ready && setActiveOutputTab(tab.id)} title={tab.tip}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 text-[9px] font-bold uppercase tracking-widest rounded-t transition-all whitespace-nowrap
-                    ${activeOutputTab === tab.id ? 'bg-white/10 text-blue-400 border-b-2 border-blue-400' : tab.ready ? 'text-white/40 hover:text-white/60 hover:bg-white/5' : 'text-white/15 cursor-not-allowed'}`}>
-                  <tab.icon className="w-3 h-3" />
-                  {tab.label}
-                  {isProtoGenerating && !tab.ready && <RefreshCw className="w-2.5 h-2.5 animate-spin ml-1" />}
-                </button>
-              ))}
-              <div className="flex-1" />
-              {protoProject && (
-                <Button size="sm" className="h-6 text-[9px] bg-blue-600 hover:bg-blue-500 text-white" onClick={handleExportAll} title="Download everything as one organized document">
-                  <FileDown className="w-3 h-3 mr-1" /> Export All
-                </Button>
-              )}
-            </div>
-            {/* Tab content (compact bottom panel) */}
-            <div className={`overflow-auto transition-all ${activeOutputTab === '3d' ? 'h-0' : 'h-56'}`}>
+          {/* ─── Output Tab Content (viewport overlay, shown for non-3D tabs) ─── */}
+          {engineeringMode === 'prototype' && activeOutputTab !== '3d' && (
+            <div className="absolute inset-0 z-20 bg-slate-950/95 backdrop-blur-sm overflow-auto">
               {activeOutputTab === 'bom' && (
                 <div className="p-3 space-y-2">
                   <div className="flex items-center justify-between">
@@ -3067,6 +3147,7 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
                 </div>
               )}
             </div>
+          )}
           </div>
         </div>
 
@@ -3663,56 +3744,40 @@ function ConsultantInterface({
           <div ref={bottomRef} />
         </div>
       </div>
-      <div className="p-2.5 border-t border-white/10 bg-black/30 flex flex-col gap-2">
-        <div className="flex items-center justify-between px-1">
-            <div className="flex items-center gap-2">
-                <div className={`w-1.5 h-1.5 rounded-full ${useDeepThinking ? 'bg-laser-accent animate-pulse shadow-[0_0_8px_#00f2ff]' : 'bg-white/20'}`} />
-                <Label className="text-[9px] font-bold uppercase tracking-widest text-white/40">Deep Think</Label>
-            </div>
-            <div 
-                className={`w-8 h-4 rounded-full transition-colors cursor-pointer flex items-center p-0.5 ${useDeepThinking ? 'bg-laser-accent' : 'bg-white/10'}`}
-                onClick={() => setUseDeepThinking(!useDeepThinking)}
-                title="When on, the AI thinks longer and gives more detailed answers"
-            >
-                <motion.div 
-                animate={{ x: useDeepThinking ? 16 : 0 }} 
-                className={`w-3 h-3 rounded-full shadow-sm ${useDeepThinking ? 'bg-black' : 'bg-white'}`} 
-                />
-            </div>
-        </div>
+      <div className="p-2 border-t border-white/10 bg-black/30 flex flex-col gap-1.5">
         {/* Pending image preview */}
         {pendingImage && (
           <div className="relative inline-block self-start">
-            <img src={pendingImage} alt="Attached" className="max-h-16 rounded-lg border border-white/10" />
+            <img src={pendingImage} alt="Attached" className="max-h-12 rounded-lg border border-white/10" />
             <button onClick={() => setPendingImage(null)} className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-500 flex items-center justify-center text-white text-[8px]">
               <X className="w-2.5 h-2.5" />
             </button>
           </div>
         )}
-        <div className="flex gap-1.5 items-end">
+        <div className="flex gap-1 items-end">
             {/* Hidden file input */}
             <input ref={imageInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
-            {/* Image upload button */}
-            <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0 text-white/40 hover:text-white" onClick={() => imageInputRef.current?.click()} title="Attach an image">
-              <Paperclip className="w-3.5 h-3.5" />
-            </Button>
-            {/* Camera capture button */}
-            <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0 text-white/40 hover:text-white" 
-              onClick={() => { const inp = imageInputRef.current; if (inp) { inp.setAttribute('capture', 'environment'); inp.click(); inp.removeAttribute('capture'); } }}
-              title="Take a photo">
-              <Camera className="w-3.5 h-3.5" />
-            </Button>
-            {/* Voice recording button */}
-            <Button variant="ghost" size="icon" className={`h-9 w-9 shrink-0 ${isRecordingVoice ? 'text-red-400 animate-pulse bg-red-400/10' : 'text-white/40 hover:text-white'}`} 
-              onClick={isRecordingVoice ? stopVoiceRecording : startVoiceRecording}
-              title={isRecordingVoice ? 'Stop recording' : 'Record voice message'}>
-              <Mic className="w-3.5 h-3.5" />
-            </Button>
+            {/* Action buttons */}
+            <div className="flex gap-0.5 shrink-0">
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-white/40 hover:text-white" onClick={() => imageInputRef.current?.click()} title="Attach an image">
+                <Paperclip className="w-3 h-3" />
+              </Button>
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-white/40 hover:text-white" 
+                onClick={() => { const inp = imageInputRef.current; if (inp) { inp.setAttribute('capture', 'environment'); inp.click(); inp.removeAttribute('capture'); } }}
+                title="Take a photo">
+                <Camera className="w-3 h-3" />
+              </Button>
+              <Button variant="ghost" size="icon" className={`h-8 w-8 ${isRecordingVoice ? 'text-red-400 animate-pulse bg-red-400/10' : 'text-white/40 hover:text-white'}`} 
+                onClick={isRecordingVoice ? stopVoiceRecording : startVoiceRecording}
+                title={isRecordingVoice ? 'Stop recording' : 'Record voice message'}>
+                <Mic className="w-3 h-3" />
+              </Button>
+            </div>
             {/* Growing textarea */}
             <textarea
               ref={textareaRef}
-              placeholder="Describe your project idea, paste a link, or attach an image..."
-              className="flex-1 min-h-[36px] max-h-[120px] resize-none rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-[11px] text-white placeholder:text-white/30 focus:outline-none focus:border-laser-accent/50 shadow-inner overflow-y-auto"
+              placeholder="Describe your project idea..."
+              className="flex-1 min-h-[32px] max-h-[100px] resize-none rounded-lg bg-white/5 border border-white/10 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/30 focus:outline-none focus:border-laser-accent/50 shadow-inner overflow-y-auto"
               value={input}
               onChange={(e) => { setInput(e.target.value); autoResize(); }}
               onKeyDown={(e) => {
@@ -3720,19 +3785,30 @@ function ConsultantInterface({
               }}
               rows={1}
             />
-            <Button className="accent-btn h-9 px-3 shrink-0 shadow-lg shadow-cyan-500/20 text-[10px]" onClick={sendMessage} title="Send your message to the AI advisor">
-            <Zap className="w-3 h-3" />
+            <Button className="accent-btn h-8 px-2.5 shrink-0 shadow-lg shadow-cyan-500/20 text-[10px]" onClick={sendMessage} title="Send message">
+              <Zap className="w-3 h-3" />
             </Button>
         </div>
-        <Button 
-          variant="outline" 
-          className="w-full h-8 text-[10px] uppercase tracking-widest font-bold bg-gradient-to-r from-blue-600/20 to-purple-600/20 border-blue-500/30 text-blue-300 hover:from-blue-600/30 hover:to-purple-600/30 hover:text-blue-200"
-          onClick={handleManualBuild}
-          disabled={messages.length < 2}
-          title="Take the conversation so far and generate a full 3D design from it"
-        >
-          <Wrench className="w-3 h-3 mr-1.5" /> Build Blueprint from Discussion
-        </Button>
+        {/* Bottom row: Deep Think toggle + Build Blueprint */}
+        <div className="flex items-center gap-2 px-0.5">
+          <div className="flex items-center gap-1.5 cursor-pointer" onClick={() => setUseDeepThinking(!useDeepThinking)} title="When on, the AI thinks longer and gives more detailed answers">
+            <div className={`w-6 h-3 rounded-full transition-colors flex items-center p-0.5 ${useDeepThinking ? 'bg-laser-accent' : 'bg-white/10'}`}>
+              <motion.div animate={{ x: useDeepThinking ? 12 : 0 }} className={`w-2 h-2 rounded-full shadow-sm ${useDeepThinking ? 'bg-black' : 'bg-white'}`} />
+            </div>
+            <span className={`text-[8px] font-bold uppercase tracking-widest ${useDeepThinking ? 'text-laser-accent' : 'text-white/30'}`}>Deep</span>
+          </div>
+          <div className="flex-1" />
+          <Button 
+            variant="ghost" 
+            size="sm"
+            className="h-6 text-[9px] uppercase tracking-widest font-bold text-blue-400/60 hover:text-blue-300 hover:bg-blue-600/10 px-2"
+            onClick={handleManualBuild}
+            disabled={messages.length < 2}
+            title="Generate a full 3D design from the conversation"
+          >
+            <Wrench className="w-3 h-3 mr-1" /> Build Blueprint
+          </Button>
+        </div>
       </div>
     </div>
   );
