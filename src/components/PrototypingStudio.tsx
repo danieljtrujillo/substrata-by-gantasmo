@@ -48,8 +48,11 @@ import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Stage, PerspectiveCamera, Environment, Grid } from '@react-three/drei';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
-import { generateProjectBlueprint } from '../services/geminiService';
+import { generateProjectBlueprint, generateArchitecturalBlueprint } from '../services/geminiService';
 import { DESIGN_TEMPLATES } from '../designDatabase';
+import { LibraryPanel, HackerPanel, ArchitecturePanel } from './StudioModePanels';
+import { Library } from 'lucide-react';
+import type { IndexedAsset } from '../lib/scraper/ingest';
 
 // Simplified 3D Component for Visualization
 const PrototypePreview = ({ type }: { type: string }) => {
@@ -126,6 +129,38 @@ export const PrototypingStudio = ({ designStyle = 'minimalist', advisorContext =
   const [showLayerPanel, setShowLayerPanel] = useState(false);
   const [layerTick, setLayerTick] = useState(0);
 
+  // ── Studio mode (maker | architecture | hacker) ────────────────────────────
+  // Gates which generators, panels, and validators are surfaced in the UI.
+  type StudioMode = 'maker' | 'architecture' | 'hacker';
+  const [studioMode, setStudioMode] = useState<StudioMode>(() => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('substrata.studioMode') : null;
+    return (saved === 'architecture' || saved === 'hacker') ? saved : 'maker';
+  });
+  useEffect(() => {
+    if (typeof window !== 'undefined') localStorage.setItem('substrata.studioMode', studioMode);
+  }, [studioMode]);
+
+  // ── Mode-specific panel visibility ─────────────────────────────────────────
+  const [showLibrary, setShowLibrary] = useState(false);
+  const [showHackerPanel, setShowHackerPanel] = useState(false);
+  const [showArchPanel, setShowArchPanel] = useState(false);
+  const [importedAssets, setImportedAssets] = useState<IndexedAsset[]>([]);
+
+  const handleLibraryImport = (asset: IndexedAsset, _buffer: ArrayBuffer) => {
+    setImportedAssets(prev => [...prev, asset]);
+    setImportedModelName(asset.hit.title);
+    if (asset.validation) {
+      setValidationReport(asset.validation);
+      setShowValidation(true);
+    }
+  };
+
+  // When mode changes, close panels that don't belong to the new mode.
+  useEffect(() => {
+    if (studioMode !== 'hacker')       setShowHackerPanel(false);
+    if (studioMode !== 'architecture') setShowArchPanel(false);
+  }, [studioMode]);
+
   // Auto-fill prompt from advisor context
   useEffect(() => {
     if (autoPrompt && autoPrompt !== prompt) {
@@ -191,26 +226,59 @@ export const PrototypingStudio = ({ designStyle = 'minimalist', advisorContext =
         setGenerationProgress(p => Math.min(p + 5, 85));
       }, 2000);
 
-      const data = await generateProjectBlueprint(activePrompt, designStyle, selectedPrinter, advisorContext);
-      
-      clearInterval(progressInterval);
-      setGenerationProgress(90);
-      
-      const newProject: PrototypeProject = {
-        id: `proto_${Date.now()}`,
-        name: data.name,
-        description: data.description,
-        designNotes: data.designNotes || '',
-        parts: (data.parts || []).map((p: any) => ({ ...p, id: p.id || Math.random().toString(36).substr(2, 9) })),
-        openscadCode: data.openscadCode || '// No custom 3D parts generated',
-        svgDesign: data.svgDesign || '',
-        wiringDiagram: data.wiringDiagram || 'No electronics in this design',
-        assemblySteps: data.assemblySteps || [],
-        code: data.code,
-        printingFiles: data.printingFiles || [],
-        communityRefs: data.communityRefs || [],
-        status: 'ready'
-      };
+      let newProject: PrototypeProject;
+
+      if (studioMode === 'architecture') {
+        const arch = await generateArchitecturalBlueprint(activePrompt, 'residential', 'metric', advisorContext);
+        clearInterval(progressInterval);
+        setGenerationProgress(90);
+        newProject = {
+          id: `arch_${Date.now()}`,
+          name: arch.name,
+          description: arch.description,
+          designNotes: (arch.buildingCodeNotes ?? []).join('\n'),
+          parts: (arch.materialSchedule ?? []).map((m, i) => ({
+            id: `mat_${i}`,
+            name: m.item,
+            source: 'Material',
+            price: 0,
+            speed: '1-Week',
+            category: 'Structural',
+            specs: `${m.qty} ${m.unit} · ${m.spec}`,
+            url: '',
+            fabrication: 'off_shelf',
+          })),
+          openscadCode: arch.openscadCode || '// architectural model',
+          svgDesign: arch.floorPlanSvg || '',
+          wiringDiagram: '',
+          assemblySteps: arch.assemblySteps ?? [],
+          code: '',
+          printingFiles: [],
+          communityRefs: arch.communityRefs ?? [],
+          status: 'ready',
+        };
+        setShowArchPanel(true);
+      } else {
+        const data = await generateProjectBlueprint(activePrompt, designStyle, selectedPrinter, advisorContext);
+        clearInterval(progressInterval);
+        setGenerationProgress(90);
+        newProject = {
+          id: `proto_${Date.now()}`,
+          name: data.name,
+          description: data.description,
+          designNotes: data.designNotes || '',
+          parts: (data.parts || []).map((p: any) => ({ ...p, id: p.id || Math.random().toString(36).substr(2, 9) })),
+          openscadCode: data.openscadCode || '// No custom 3D parts generated',
+          svgDesign: data.svgDesign || '',
+          wiringDiagram: data.wiringDiagram || 'No electronics in this design',
+          assemblySteps: data.assemblySteps || [],
+          code: data.code,
+          printingFiles: data.printingFiles || [],
+          communityRefs: data.communityRefs || [],
+          status: 'ready'
+        };
+        if (studioMode === 'hacker') setShowHackerPanel(true);
+      }
 
       setCurrentProject(newProject);
       setGenerationProgress(100);
@@ -241,11 +309,36 @@ export const PrototypingStudio = ({ designStyle = 'minimalist', advisorContext =
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Studio mode switcher — gates which generators/panels render */}
+          <div className="flex items-center bg-black/40 border border-white/10 rounded-lg p-0.5">
+            {(['maker', 'architecture', 'hacker'] as const).map(m => {
+              const active = studioMode === m;
+              const Icon = m === 'architecture' ? Building2 : m === 'hacker' ? Cpu : Wrench;
+              const activeClass =
+                m === 'architecture' ? 'bg-emerald-500/20 text-emerald-300' :
+                m === 'hacker'       ? 'bg-amber-500/20 text-amber-300' :
+                                       'bg-blue-500/20 text-blue-300';
+              return (
+                <button
+                  key={m}
+                  onClick={() => setStudioMode(m)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-mono uppercase tracking-wider transition-colors ${
+                    active ? activeClass : 'text-white/40 hover:text-white/70'
+                  }`}
+                  title={`Switch to ${m} mode`}
+                >
+                  <Icon className="w-3 h-3" />
+                  {m}
+                </button>
+              );
+            })}
+          </div>
+          <Separator orientation="vertical" className="h-4 bg-white/10" />
           <Badge variant="outline" className="bg-white/5 text-blue-300 border-blue-500/30">
             <Zap className="w-3 h-3 mr-1" /> ACTIVE ENGINE
           </Badge>
           <Separator orientation="vertical" className="h-4 bg-white/10" />
-          <select 
+          <select
             className="bg-black/40 border border-white/10 text-xs text-white/60 rounded px-2 py-1 outline-none focus:border-blue-500/50"
             value={selectedPrinter}
             onChange={(e) => setSelectedPrinter(e.target.value)}
@@ -444,8 +537,65 @@ export const PrototypingStudio = ({ designStyle = 'minimalist', advisorContext =
                       >
                         <Upload className="w-4 h-4" />
                       </Button>
+                      <Separator orientation="vertical" className="h-8 bg-white/10" />
+                      {/* Library — always available across modes */}
+                      <Button
+                        size="icon" variant="ghost"
+                        className={`h-8 w-8 transition-colors ${showLibrary ? 'text-amber-400 bg-amber-500/10' : 'text-white/60 hover:text-amber-300'}`}
+                        title="Open public-domain library (Smithsonian, LOC HABS)"
+                        onClick={() => setShowLibrary(v => !v)}
+                      >
+                        <Library className="w-4 h-4" />
+                      </Button>
+                      {/* Architecture mode — code findings + electrical */}
+                      {studioMode === 'architecture' && (
+                        <Button
+                          size="icon" variant="ghost"
+                          className={`h-8 w-8 transition-colors ${showArchPanel ? 'text-emerald-400 bg-emerald-500/10' : 'text-white/60 hover:text-emerald-300'}`}
+                          title="Architecture audit — IBC / ADA / NEC"
+                          onClick={() => setShowArchPanel(v => !v)}
+                        >
+                          <Building2 className="w-4 h-4" />
+                        </Button>
+                      )}
+                      {/* Hacker mode — PCB schematic */}
+                      {studioMode === 'hacker' && (
+                        <Button
+                          size="icon" variant="ghost"
+                          className={`h-8 w-8 transition-colors ${showHackerPanel ? 'text-amber-400 bg-amber-500/10' : 'text-white/60 hover:text-amber-300'}`}
+                          title="Generate PCB schematic (KiCad export)"
+                          onClick={() => setShowHackerPanel(v => !v)}
+                        >
+                          <Cpu className="w-4 h-4" />
+                        </Button>
+                      )}
                     </Card>
                   </div>
+
+                  {/* Library Panel */}
+                  {showLibrary && (
+                    <LibraryPanel
+                      onClose={() => setShowLibrary(false)}
+                      onUseAsBase={handleLibraryImport}
+                    />
+                  )}
+
+                  {/* Hacker mode PCB panel */}
+                  {showHackerPanel && studioMode === 'hacker' && (
+                    <HackerPanel
+                      onClose={() => setShowHackerPanel(false)}
+                      initialPrompt={prompt}
+                    />
+                  )}
+
+                  {/* Architecture mode audit panel */}
+                  {showArchPanel && studioMode === 'architecture' && (
+                    <ArchitecturePanel
+                      onClose={() => setShowArchPanel(false)}
+                      building={undefined}
+                      electricalPlan={undefined}
+                    />
+                  )}
 
                   {/* layerTick read here so React re-renders the panel on visibility toggle */}
                   {showLayerPanel && layerTick >= 0 && (

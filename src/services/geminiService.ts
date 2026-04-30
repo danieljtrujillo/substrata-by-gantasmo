@@ -1,6 +1,7 @@
 import { GoogleGenAI, ThinkingLevel, Type, FunctionDeclaration } from "@google/genai";
 import { getComponentDatabaseSummary, getTemplateSummary, DESIGN_PRACTICES, COMMUNITY_SOURCES } from '../designDatabase';
 import { getStyleDirective, get3DStyleDirective, getSketchStyleDirective, type DesignStyle } from '../styleGuides';
+import { getStyleSnippetHeader, getStyleSnippetDirective, withStyleHeader } from '../lib/styleSnippets';
 import { getRegistrySummary, getDfmSummary } from '../engineeringRegistry';
 
 const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
@@ -428,6 +429,13 @@ Generate a complete, actionable prototype blueprint. Every part should be design
 
 ${get3DStyleDirective(designStyle as DesignStyle)}
 
+${getStyleSnippetDirective(designStyle as DesignStyle)}
+
+The following OpenSCAD style header will be PREPENDED to your output. Do not redefine these modules — call them by name in your geometry.
+\`\`\`openscad
+${getStyleSnippetHeader(designStyle as DesignStyle)}
+\`\`\`
+
 Return exactly as JSON.`;
 
   const contentParts: any[] = [];
@@ -494,10 +502,11 @@ Return exactly as JSON.`;
 
   // Validate and log warnings for the generated OpenSCAD code
   if (result.openscadCode) {
+    result.openscadCode = withStyleHeader(designStyle as DesignStyle, result.openscadCode);
     const { warnings } = validateAndFixOpenSCAD(result.openscadCode);
     if (warnings.length > 0) {
       console.warn('[SUBSTRATA] OpenSCAD validation warnings:', warnings);
-      result.designNotes = (result.designNotes || '') + 
+      result.designNotes = (result.designNotes || '') +
         '\n\n⚠️ 3D Model Notes: ' + warnings.join('. ') + '.';
     }
   }
@@ -532,6 +541,13 @@ RULES:
 
 ${get3DStyleDirective(designStyle as DesignStyle)}
 
+${getStyleSnippetDirective(designStyle as DesignStyle)}
+
+The following style header is already prepended to the file — call these helpers by name; do not redefine them:
+\`\`\`openscad
+${getStyleSnippetHeader(designStyle as DesignStyle)}
+\`\`\`
+
 Return as JSON.`,
     config: {
       responseMimeType: "application/json",
@@ -553,6 +569,166 @@ Return as JSON.`,
   }));
 
   return JSON.parse(response.text);
+}
+
+// ── PCB Schematic Generation (Hacker mode) ────────────────────
+// Generates a circuit-graph IR that downstream tools render to .kicad_sch.
+// The model is constrained to the Schematic shape via responseSchema, and
+// validated against the IR's electrical rules before being returned.
+
+import type { Schematic, CircuitFinding } from '../lib/circuitGraph';
+import { validateSchematic } from '../lib/circuitGraph';
+
+export interface PCBSchematicResult {
+  schematic: Schematic;
+  /** Validation findings from validateSchematic. Pass-through for the UI. */
+  findings: CircuitFinding[];
+  /** Whether any rule had severity 'error'. */
+  hasErrors: boolean;
+  /** Free-form summary the model wrote about its design. */
+  summary: string;
+}
+
+export async function generatePCBSchematic(
+  prompt: string,
+  context: { projectName?: string; targetMcu?: string; powerVolts?: number; constraints?: string } = {},
+): Promise<PCBSchematicResult> {
+  const projectName = context.projectName ?? 'Schematic';
+  const systemPrompt = `You are a PCB schematic designer. Output a complete, manufacturable
+single-sheet schematic for the request below as JSON matching the provided schema.
+
+Hard rules:
+  • Every component has a unique ref designator (R1, R2, U1, J1, ...).
+  • Every net joining N pins lists exactly N connections — no orphan pins.
+  • Power-in pins MUST be connected to a power_out pin somewhere on the sheet.
+  • Use canonical net names: GND, VCC, +3V3, +5V, +12V (no +3.3V, no Vcc).
+  • Decoupling caps: every IC VCC/VDD pin gets a 100nF cap to GND, < 5mm placement.
+  • Use real KiCad library symbols: "Device:R", "Device:C", "Device:LED",
+    "Device:D_Schottky", "MCU_Microchip_ATmega:ATmega328P-PU",
+    "MCU_Module:Arduino_Nano_v3.x", "RF_Module:ESP32-WROOM-32",
+    "Connector_Generic:Conn_01x04" etc.
+  • Pin types must be honest — power_in for VCC/GND on ICs, passive for
+    resistor/cap leads, output/input/bidirectional for signal pins.
+  • Place components on a 2.54mm grid (KiCad units = 0.1mm, so positions
+    should be multiples of 25.4 in IR units).
+
+Soft rules:
+  • Use the smallest part that satisfies the requirement.
+  • Add brief (one-line) descriptions for non-obvious component choices.
+  • Add MPN for parts that benefit from sourcing (MCUs, regulators, sensors).`;
+
+  const contextLines = [
+    context.targetMcu     ? `Target MCU: ${context.targetMcu}` : '',
+    context.powerVolts    ? `Supply voltage: ${context.powerVolts}V` : '',
+    context.constraints   ? `Constraints: ${context.constraints}` : '',
+  ].filter(Boolean).join('\n');
+
+  const response = await withRetry(() => ai.models.generateContent({
+    model: 'gemini-3.1-pro-preview',
+    contents: `${systemPrompt}\n\nREQUEST: ${prompt}\n${contextLines}\n\nProject name: "${projectName}"`,
+    config: {
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          projectName: { type: Type.STRING },
+          notes:       { type: Type.STRING },
+          summary:     { type: Type.STRING, description: 'One-paragraph description of the design choices.' },
+          sheets: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                title: { type: Type.STRING },
+                size:  { type: Type.STRING, description: 'A4, A3, or USLetter' },
+                rev:   { type: Type.STRING },
+                date:  { type: Type.STRING },
+                components: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      ref:        { type: Type.STRING },
+                      value:      { type: Type.STRING },
+                      libId:      { type: Type.STRING },
+                      footprint:  { type: Type.STRING },
+                      mpn:        { type: Type.STRING },
+                      description:{ type: Type.STRING },
+                      pos: {
+                        type: Type.OBJECT,
+                        properties: { x: { type: Type.NUMBER }, y: { type: Type.NUMBER } },
+                        required: ['x', 'y'],
+                      },
+                      rotation: { type: Type.NUMBER, description: '0, 90, 180, or 270' },
+                      pins: {
+                        type: Type.ARRAY,
+                        items: {
+                          type: Type.OBJECT,
+                          properties: {
+                            number: { type: Type.STRING },
+                            name:   { type: Type.STRING },
+                            type:   { type: Type.STRING, description: 'input|output|bidirectional|tri_state|passive|power_in|power_out|open_collector|open_emitter|unconnected|no_connect' },
+                          },
+                          required: ['number', 'name', 'type'],
+                        },
+                      },
+                    },
+                    required: ['ref', 'value', 'libId', 'pos', 'rotation', 'pins'],
+                  },
+                },
+                nets: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      name:     { type: Type.STRING },
+                      netClass: { type: Type.STRING },
+                      connections: {
+                        type: Type.ARRAY,
+                        items: {
+                          type: Type.OBJECT,
+                          properties: {
+                            componentRef: { type: Type.STRING },
+                            pinNumber:    { type: Type.STRING },
+                          },
+                          required: ['componentRef', 'pinNumber'],
+                        },
+                      },
+                    },
+                    required: ['name', 'connections'],
+                  },
+                },
+              },
+              required: ['title', 'size', 'components', 'nets'],
+            },
+          },
+        },
+        required: ['projectName', 'summary', 'sheets'],
+      },
+      thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
+    },
+  }));
+
+  const parsed = JSON.parse(response.text ?? '{}');
+  // Coerce rotation to one of the legal values; LLM occasionally returns floats.
+  for (const sheet of parsed.sheets ?? []) {
+    for (const c of sheet.components ?? []) {
+      const r = Math.round((c.rotation ?? 0) / 90) * 90;
+      c.rotation = ((r % 360) + 360) % 360;
+    }
+  }
+  const schematic: Schematic = {
+    projectName: parsed.projectName ?? projectName,
+    notes: parsed.notes,
+    sheets: parsed.sheets,
+  };
+  const findings = validateSchematic(schematic);
+  return {
+    schematic,
+    findings,
+    hasErrors: findings.some(f => f.severity === 'error'),
+    summary: parsed.summary ?? '',
+  };
 }
 
 // ── Concept Sketch Generation ─────────────────────────────────
@@ -619,6 +795,115 @@ export async function generateConceptSketch(
     }
   }
   return null;
+}
+
+// ── Style Fingerprint Validator ──────────────────────────────────────────────
+// Second-pass check: render the generated 3D / sketch, send it to Flash with
+// the style guide, and ask "does this image actually exhibit this style?"
+// Returns a score + deviation list. Below the threshold, the caller can
+// regenerate with the deviations injected as corrections.
+
+export interface StyleFingerprintResult {
+  /** 0..1 — how strongly the image exhibits the claimed style. */
+  styleScore: number;
+  matches: boolean;            // styleScore >= passThreshold
+  /** Per-rule deviations the model identified in the image. */
+  deviations: string[];
+  /** Concrete edits to push the result more toward the style. */
+  corrections: string[];
+  /** Free-text rationale. */
+  rationale: string;
+}
+
+export async function fingerprintStyle(
+  renderedImageBase64: string,
+  style: DesignStyle,
+  opts: { passThreshold?: number; referenceImagesBase64?: string[] } = {},
+): Promise<StyleFingerprintResult> {
+  const threshold = opts.passThreshold ?? 0.7;
+  const directive = get3DStyleDirective(style);
+
+  const parts: any[] = [
+    { text: `You are a strict design-style auditor. Score how strongly the IMAGE BELOW exhibits the
+named style. Use the rules in the style guide as your rubric. Be ruthless: a 0.7
+means "clearly this style"; 0.5 means "mostly but with significant deviations";
+0.3 means "the style is detectable but the work undermines it." Don't grade on
+a curve.
+
+CLAIMED STYLE: ${style}
+
+STYLE GUIDE:
+${directive}` },
+    { inlineData: { data: renderedImageBase64.split(',').pop()!, mimeType: 'image/png' } },
+  ];
+
+  if (opts.referenceImagesBase64?.length) {
+    parts.push({ text: '\n\nREFERENCE EXEMPLARS of the target style for calibration:' });
+    for (const ref of opts.referenceImagesBase64) {
+      parts.push({ inlineData: { data: ref.split(',').pop()!, mimeType: 'image/png' } });
+    }
+  }
+
+  const response = await withRetry(() => ai.models.generateContent({
+    model: 'gemini-3.1-flash-preview',
+    contents: { parts },
+    config: {
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          styleScore:  { type: Type.NUMBER, description: '0..1' },
+          deviations:  { type: Type.ARRAY,  items: { type: Type.STRING } },
+          corrections: { type: Type.ARRAY,  items: { type: Type.STRING } },
+          rationale:   { type: Type.STRING },
+        },
+        required: ['styleScore', 'deviations', 'corrections', 'rationale'],
+      },
+    },
+  }));
+
+  const parsed = JSON.parse(response.text ?? '{}');
+  const styleScore = Math.max(0, Math.min(1, Number(parsed.styleScore) || 0));
+  return {
+    styleScore,
+    matches: styleScore >= threshold,
+    deviations:  parsed.deviations  ?? [],
+    corrections: parsed.corrections ?? [],
+    rationale:   parsed.rationale   ?? '',
+  };
+}
+
+/**
+ * Convenience: run a generator, fingerprint the result, and if it falls below
+ * the threshold, re-run once with the corrections injected as additional
+ * directive text. The generator function takes optional extra text that should
+ * be appended to its prompt.
+ */
+export async function generateWithStyleGuard<T>(
+  style: DesignStyle,
+  generate: (extraDirective: string) => Promise<{ result: T; renderedImageBase64: string }>,
+  opts: { passThreshold?: number; maxRetries?: number; referenceImagesBase64?: string[] } = {},
+): Promise<{ result: T; fingerprint: StyleFingerprintResult; attempts: number }> {
+  const maxRetries = opts.maxRetries ?? 1;
+  let extra = '';
+  let attempt = 0;
+  let last: { result: T; renderedImageBase64: string } | null = null;
+  let fp: StyleFingerprintResult | null = null;
+
+  while (attempt <= maxRetries) {
+    attempt++;
+    last = await generate(extra);
+    fp = await fingerprintStyle(last.renderedImageBase64, style, {
+      passThreshold: opts.passThreshold,
+      referenceImagesBase64: opts.referenceImagesBase64,
+    });
+    if (fp.matches) break;
+    extra = `\n\nPRIOR ATTEMPT FAILED STYLE CHECK (score ${fp.styleScore.toFixed(2)}). Address these specific deviations:\n` +
+            fp.deviations.map(d => `  - ${d}`).join('\n') +
+            `\n\nApply these corrections:\n` +
+            fp.corrections.map(c => `  - ${c}`).join('\n');
+  }
+  return { result: last!.result, fingerprint: fp!, attempts: attempt };
 }
 
 // ── Model vs. Description Validation (AI semantic check) ─────────────────────
