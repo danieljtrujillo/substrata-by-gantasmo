@@ -78,7 +78,8 @@ import {
   Play,
   Pause,
   Paperclip,
-  Camera
+  Camera,
+  Building2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { onAuthStateChanged, CloudflareUser } from './lib/auth';
@@ -121,12 +122,15 @@ import {
   getSmartSettings,
   transcribeSpokenPrompt,
   generateProjectBlueprint,
+  generateArchitecturalBlueprint,
   generateConceptSketch,
   generateConceptSheet,
   searchCommunityModels,
   generateParametricVariant,
   type SketchMode
 } from './services/geminiService';
+import { LibraryPanel as AssetLibraryPanel, HackerPanel, ArchitecturePanel } from './components/StudioModePanels';
+import type { IndexedAsset } from './lib/scraper/ingest';
 import { speakText, cancelSpeech, generateAudioBuffer, playBuffer } from './services/ttsService';
 import { ACMER_S1_PARAMETERS, ACMER_S1_MANUAL_SUMMARY, PROJECT_TEMPLATES, LaserSettings, LabelSettings, LABEL_SIZE_PRESETS, MUNBYN_ITPP130B, PRINTER_DATABASE, LASER_DATABASE } from './constants';
 import { STYLE_GUIDES } from './styleGuides';
@@ -728,6 +732,25 @@ export default function App() {
   const [showMaintenance, setShowMaintenance] = useState(false);
   const [showDocs, setShowDocs] = useState(false);
   const [isAdvancedEditorOpen, setIsAdvancedEditorOpen] = useState(false);
+
+  // Studio sub-mode within prototype: maker (default) | architecture (buildings + IBC/ADA/NEC) | hacker (PCB schematics)
+  type StudioMode = 'maker' | 'architecture' | 'hacker';
+  const [studioMode, setStudioMode] = useState<StudioMode>(() => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('substrata.studioMode') : null;
+    return (saved === 'architecture' || saved === 'hacker') ? saved : 'maker';
+  });
+  useEffect(() => {
+    if (typeof window !== 'undefined') localStorage.setItem('substrata.studioMode', studioMode);
+  }, [studioMode]);
+  const [showAssetLibrary, setShowAssetLibrary] = useState(false);
+  const [showHackerPanel, setShowHackerPanel] = useState(false);
+  const [showArchPanel, setShowArchPanel] = useState(false);
+  const [importedAssets, setImportedAssets] = useState<IndexedAsset[]>([]);
+  useEffect(() => {
+    // Auto-close mode-gated panels when leaving their mode
+    if (studioMode !== 'hacker')       setShowHackerPanel(false);
+    if (studioMode !== 'architecture') setShowArchPanel(false);
+  }, [studioMode]);
 
   // Lifted prototype generation state (persists across tab switches)
   const [protoProject, setProtoProject] = useState<PrototypeProject | null>(null);
@@ -1761,10 +1784,36 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
       }, 2500);
 
       const registrySummary = getRegistrySummary();
-      const enrichedPrompt = registrySummary 
-        ? `${activePrompt}\n\n[User's existing component inventory: ${registrySummary}]` 
+      const enrichedPrompt = registrySummary
+        ? `${activePrompt}\n\n[User's existing component inventory: ${registrySummary}]`
         : activePrompt;
-      const data = await generateProjectBlueprint(enrichedPrompt, designStyle, selectedPrinter, '', referenceImage || undefined);
+      // Mode-dispatch: architecture uses architectural blueprint generator (buildings + IBC/ADA/NEC).
+      // Hacker mode uses the regular blueprint and surfaces the PCB panel for schematic work.
+      const data: any = studioMode === 'architecture'
+        ? await (async () => {
+            const arch = await generateArchitecturalBlueprint(enrichedPrompt, 'residential', 'metric', '', referenceImage || undefined);
+            // Map building blueprint shape onto the prototype-project shape so the rest of the UI works.
+            return {
+              name: arch.name,
+              description: arch.description,
+              designNotes: arch.buildingCodeNotes?.join('\n\n') || '',
+              parts: (arch.materialSchedule || []).map((m, i) => ({
+                id: `mat_${i}`,
+                name: m.item,
+                description: m.spec,
+                qty: m.qty,
+                unit: m.unit,
+              })),
+              openscadCode: arch.openscadCode || '// Architectural model',
+              svgDesign: arch.floorPlanSvg || '',
+              wiringDiagram: 'See electrical plan in Architecture panel',
+              assemblySteps: arch.assemblySteps || [],
+              code: undefined,
+              printingFiles: [],
+              communityRefs: arch.communityRefs || [],
+            };
+          })()
+        : await generateProjectBlueprint(enrichedPrompt, designStyle, selectedPrinter, '', referenceImage || undefined);
       
       clearInterval(progressInterval);
       setProtoGenerationProgress(90);
@@ -1789,7 +1838,14 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
       setProtoProject(newProject);
       setProtoGenerationProgress(100);
       setActiveOutputTab('bom');
-      toast.success("Blueprint Generated — Design files ready!");
+      // Auto-open the mode-relevant panel so the new outputs surface immediately
+      if (studioMode === 'architecture') setShowArchPanel(true);
+      if (studioMode === 'hacker')       setShowHackerPanel(true);
+      toast.success(
+        studioMode === 'architecture' ? 'Building blueprint generated — code findings ready' :
+        studioMode === 'hacker'       ? 'Blueprint generated — open PCB panel to design the schematic' :
+                                        'Blueprint Generated — Design files ready!'
+      );
     } catch (error) {
       console.error(error);
       toast.error("Generation failed. Please try again.");
@@ -2325,6 +2381,34 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
         )}
       </AnimatePresence>
 
+      {/* ═══════ STUDIO MODE PANELS (mode-gated overlays) ═══════ */}
+      {(showAssetLibrary || showHackerPanel || showArchPanel) && (
+        <div className="fixed inset-0 pointer-events-none z-[70]">
+          <div className="relative w-full h-full pointer-events-auto">
+            {showAssetLibrary && (
+              <AssetLibraryPanel
+                onClose={() => setShowAssetLibrary(false)}
+                onUseAsBase={(asset) => {
+                  setImportedAssets(prev => [...prev, asset]);
+                  toast.success(`Imported ${asset.hit.title} from ${asset.hit.source}`);
+                }}
+              />
+            )}
+            {showHackerPanel && studioMode === 'hacker' && (
+              <HackerPanel
+                onClose={() => setShowHackerPanel(false)}
+                initialPrompt={protoPrompt}
+              />
+            )}
+            {showArchPanel && studioMode === 'architecture' && (
+              <ArchitecturePanel
+                onClose={() => setShowArchPanel(false)}
+              />
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ═══════ TOOLBAR ═══════ */}
       <header className="h-auto min-h-10 shrink-0 px-3 border-b border-white/10 bg-black/40 backdrop-blur-xl flex flex-wrap items-center justify-between z-50 gap-y-1 py-1">
         <div className="flex items-center gap-2 sm:gap-3">
@@ -2346,6 +2430,28 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
             <button onClick={() => setEngineeringMode('laser')} title="Prepare images for laser engraving and cutting" className={`px-1.5 sm:px-2.5 py-1 text-[8px] sm:text-[9px] font-black uppercase tracking-wider rounded-sm transition-all ${engineeringMode === 'laser' ? 'bg-laser-accent text-black' : 'text-white/40 hover:text-white/70'}`}>Laser</button>
             <button onClick={() => setEngineeringMode('label')} title="Design and print labels on a label printer" className={`px-1.5 sm:px-2.5 py-1 text-[8px] sm:text-[9px] font-black uppercase tracking-wider rounded-sm transition-all ${engineeringMode === 'label' ? 'bg-orange-500 text-white' : 'text-white/40 hover:text-white/70'}`}>Labels</button>
           </div>
+
+          {/* Studio sub-mode pill — only in 3D/prototype engineering mode */}
+          {engineeringMode === 'prototype' && (
+            <div className="hidden md:flex items-center bg-black/40 border border-white/10 rounded-md p-0.5" title="Studio sub-mode: Maker (parts), Architecture (buildings + code), Hacker (PCB)">
+              {(['maker', 'architecture', 'hacker'] as const).map(m => {
+                const active = studioMode === m;
+                const Icon = m === 'architecture' ? Building2 : m === 'hacker' ? Cpu : Wrench;
+                const activeClass =
+                  m === 'architecture' ? 'bg-emerald-500/20 text-emerald-300' :
+                  m === 'hacker'       ? 'bg-amber-500/20 text-amber-300' :
+                                         'bg-blue-500/20 text-blue-300';
+                return (
+                  <button key={m} onClick={() => setStudioMode(m)}
+                    title={m === 'maker' ? 'Maker — 3D parts and printable models' : m === 'architecture' ? 'Architecture — buildings with IBC/ADA/NEC code checks' : 'Hacker — PCB schematics with KiCad export'}
+                    className={`flex items-center gap-1 px-1.5 py-0.5 rounded-sm text-[8px] font-black uppercase tracking-wider transition-colors ${active ? activeClass : 'text-white/40 hover:text-white/70'}`}>
+                    <Icon className="w-2.5 h-2.5" />
+                    {m}
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           {/* Design style — hidden on mobile */}
           <div className="hidden md:flex gap-0.5 ml-2">
@@ -2377,6 +2483,21 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
             <Button variant="ghost" size="sm" onClick={() => setShowConceptPanel(true)} title="Draw a quick sketch and turn it into a 3D design" className="h-7 text-[9px] font-bold uppercase text-white/50 hover:text-white hover:bg-white/10 gap-1">
               <PenTool className="w-3.5 h-3.5" /> Sketch
             </Button>
+            {engineeringMode === 'prototype' && (
+              <Button variant="ghost" size="sm" onClick={() => setShowAssetLibrary(true)} title="Search public-domain 3D assets (Smithsonian, Library of Congress)" className={`h-7 text-[9px] font-bold uppercase hover:bg-white/10 gap-1 ${showAssetLibrary ? 'text-amber-300' : 'text-white/50 hover:text-white'}`}>
+                <Library className="w-3.5 h-3.5" /> Assets
+              </Button>
+            )}
+            {engineeringMode === 'prototype' && studioMode === 'architecture' && (
+              <Button variant="ghost" size="sm" onClick={() => setShowArchPanel(v => !v)} title="Building code (IBC/ADA) and electrical plan (NEC) checks" className={`h-7 text-[9px] font-bold uppercase hover:bg-white/10 gap-1 ${showArchPanel ? 'text-emerald-300' : 'text-white/50 hover:text-white'}`}>
+                <Building2 className="w-3.5 h-3.5" /> Code
+              </Button>
+            )}
+            {engineeringMode === 'prototype' && studioMode === 'hacker' && (
+              <Button variant="ghost" size="sm" onClick={() => setShowHackerPanel(v => !v)} title="Generate PCB schematics with KiCad export" className={`h-7 text-[9px] font-bold uppercase hover:bg-white/10 gap-1 ${showHackerPanel ? 'text-amber-300' : 'text-white/50 hover:text-white'}`}>
+                <Cpu className="w-3.5 h-3.5" /> PCB
+              </Button>
+            )}
           </div>
 
           {/* Mobile hamburger */}
