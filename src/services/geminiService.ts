@@ -621,6 +621,312 @@ export async function generateConceptSketch(
   return null;
 }
 
+// ── Model vs. Description Validation (AI semantic check) ─────────────────────
+// "Does this 3D model actually look like what it claims to be?"
+// Pass a rendered screenshot + the model's claimed title/description.
+
+export interface ModelValidationResult {
+  matches: boolean;
+  confidence: 'high' | 'medium' | 'low';
+  issues: string[];
+  suggestions: string[];
+  dimensionWarnings: string[];
+  summary: string;
+}
+
+export async function validateModelVsDescription(
+  renderedImageBase64: string,
+  modelTitle: string,
+  modelDescription: string,
+  expectedDimensionsMm?: { x?: number; y?: number; z?: number }
+): Promise<ModelValidationResult> {
+  const dimHint = expectedDimensionsMm
+    ? `Expected bounding box: X=${expectedDimensionsMm.x ?? '?'}mm, Y=${expectedDimensionsMm.y ?? '?'}mm, Z=${expectedDimensionsMm.z ?? '?'}mm.`
+    : '';
+
+  const response = await withRetry(() => ai.models.generateContent({
+    model: 'gemini-3.1-flash-preview',
+    contents: {
+      parts: [
+        { inlineData: { data: renderedImageBase64.replace(/^data:image\/\w+;base64,/, ''), mimeType: 'image/png' } },
+        { text: `You are a 3D model quality inspector for a CAD/fabrication platform.
+
+TASK: Verify the rendered model matches its claimed description.
+MODEL TITLE: "${modelTitle}"
+MODEL DESCRIPTION: "${modelDescription}"
+${dimHint}
+
+Check:
+1. Does the geometry match the title/description? (e.g. "M5 bolt" should look like a bolt, not a cube)
+2. Obvious geometry errors? (floating parts, missing faces, dark holes from inverted normals)
+3. Are proportions plausible for the described object?
+4. Any red flags — corrupted, wrong, or mislabeled file?
+
+Return as JSON.` },
+      ]
+    },
+    config: {
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          matches: { type: Type.BOOLEAN },
+          confidence: { type: Type.STRING, enum: ['high', 'medium', 'low'] },
+          issues: { type: Type.ARRAY, items: { type: Type.STRING } },
+          suggestions: { type: Type.ARRAY, items: { type: Type.STRING } },
+          dimensionWarnings: { type: Type.ARRAY, items: { type: Type.STRING } },
+          summary: { type: Type.STRING },
+        },
+        required: ['matches', 'confidence', 'issues', 'suggestions', 'summary'],
+      },
+    },
+  }));
+
+  const r = JSON.parse(response.text);
+  return {
+    matches: r.matches ?? false,
+    confidence: r.confidence ?? 'low',
+    issues: r.issues ?? [],
+    suggestions: r.suggestions ?? [],
+    dimensionWarnings: r.dimensionWarnings ?? [],
+    summary: r.summary ?? 'Validation inconclusive',
+  };
+}
+
+// ── Architectural Blueprint Generation ───────────────────────────────────────
+// Architecture/construction variant of generateProjectBlueprint.
+// Produces: OpenSCAD massing with //LAYER: hints, 2D SVG floor plan,
+// AIA layer assignments, IBC/ADA code notes, and material schedule.
+
+export async function generateArchitecturalBlueprint(
+  prompt: string,
+  buildingType: 'residential' | 'commercial' | 'industrial' | 'mixed-use' | 'landscape' = 'residential',
+  units: 'metric' | 'imperial' = 'metric',
+  advisorContext = '',
+  referenceImage?: string
+): Promise<{
+  name: string;
+  description: string;
+  openscadCode: string;
+  floorPlanSvg: string;
+  layerAssignments: Record<string, string>;
+  buildingCodeNotes: string[];
+  materialSchedule: Array<{ item: string; spec: string; qty: string; unit: string }>;
+  assemblySteps: string[];
+  communityRefs: string[];
+}> {
+  const unitNote = units === 'imperial'
+    ? 'UNITS: dimensions in INCHES. In OpenSCAD multiply by 25.4 to get mm.'
+    : 'UNITS: All dimensions in MILLIMETERS.';
+
+  const sysPrompt = `You are a licensed architect and BIM modeler for ${buildingType} construction.
+${unitNote}
+
+AIA/NCS LAYER NAMES: A-WALL, A-DOOR, A-DOOR-SWNG, A-WIND, A-STAIR, A-ROOF, A-CEIL, A-FLOR, A-FURN, A-EQPM, S-COLS, S-BEAM, S-SLAB, S-FNDN, M-HVAC-SUPL, M-HVAC-RETN, P-PIPE-SANR, P-PIPE-DOMW, P-PIPE-FTPR, P-FIXT, E-LITE, E-POWR, E-PANL, C-PROP, C-TOPO, A-ANNO-DIMS, A-ANNO-TEXT, A-ANNO-GRDX, A-ANNO-SECT.
+
+STANDARDS (metric):
+- Exterior walls: 305mm thick; interior: 152mm thick
+- Floor-to-floor: residential 2743mm (9'-0"), commercial 3658mm (12'-0")
+- ADA door clear: ≥ 813mm; standard widths: 813, 914, 1067mm
+- Window sill: 864mm residential, 915mm commercial; head: 2134mm
+- Column grid: 6000–9000mm o.c. commercial; 4000–5000mm residential
+- Stair rise ≤ 178mm, run ≥ 279mm (IBC 1011.5); ADA ramp ≤ 1:12
+- Natural light: window area ≥ 8% of room floor area (IBC 1205.2)
+
+OPENSCAD FOR ARCHITECTURE:
+- Walls: cube([length, thickness, height]) with translate(); tag //LAYER: A-WALL
+- Doors: difference() into wall + door_slab module + swing arc; tag //LAYER: A-DOOR
+- Windows: difference() at sill/head heights; tag //LAYER: A-WIND
+- Columns: cylinder(r=r, h=floor_h); tag //LAYER: S-COLS
+- Slabs: cube([bx, by, slab_t]); tag //LAYER: S-SLAB
+- Use for() loops for column grids, window bays, stair treads
+- Include assembly() positioning all elements with translate()
+
+FLOOR PLAN SVG (1px = 10mm):
+- Walls: grey filled rect, stroke="black"
+- Doors: stroke="blue" arc in opening + door slab rect
+- Windows: stroke="cyan" triple parallel lines in wall break
+- Dimensions: stroke="red" dashed lines, text labels in mm
+- Column grid: circles at intersections, dashdot grid lines, grid bubble labels
+- North arrow top-right; scale bar bottom-left
+- Wrap entire plan in <svg> with <title> element
+
+${advisorContext ? `SESSION CONTEXT:\n${advisorContext}\n` : ''}`;
+
+  const contentParts: any[] = [];
+  if (referenceImage) {
+    contentParts.push({ inlineData: { data: referenceImage.split(',')[1], mimeType: 'image/png' } });
+    contentParts.push({ text: 'REFERENCE: use for massing/layout inspiration.\n\n' });
+  }
+  contentParts.push({ text: `${sysPrompt}\n\nREQUEST: ${prompt}\n\nReturn as JSON.` });
+
+  const response = await withRetry(() => ai.models.generateContent({
+    model: 'gemini-3.1-pro-preview',
+    contents: { parts: contentParts },
+    config: {
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          name: { type: Type.STRING },
+          description: { type: Type.STRING },
+          openscadCode: { type: Type.STRING },
+          floorPlanSvg: { type: Type.STRING },
+          layerAssignments: { type: Type.OBJECT, additionalProperties: true },
+          buildingCodeNotes: { type: Type.ARRAY, items: { type: Type.STRING } },
+          materialSchedule: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: { item: { type: Type.STRING }, spec: { type: Type.STRING }, qty: { type: Type.STRING }, unit: { type: Type.STRING } },
+              required: ['item', 'spec', 'qty', 'unit'],
+            },
+          },
+          assemblySteps: { type: Type.ARRAY, items: { type: Type.STRING } },
+          communityRefs: { type: Type.ARRAY, items: { type: Type.STRING } },
+        },
+        required: ['name', 'description', 'openscadCode', 'floorPlanSvg', 'layerAssignments', 'buildingCodeNotes', 'assemblySteps'],
+      },
+      thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
+    },
+  }));
+
+  return JSON.parse(response.text);
+}
+
+// ── Markup Import & Analysis ─────────────────────────────────────────────────
+// Open-source equivalent of AutoCAD Markup Import / Markup Assist.
+// Feed it a redline/annotation image → get structured actionable change list.
+
+export interface MarkupItem {
+  id: string;
+  type: 'dimension_change' | 'add_element' | 'remove_element' | 'move_element' | 'note' | 'question';
+  description: string;
+  affectedModule?: string;
+  proposedChange?: string;
+  priority: 'critical' | 'major' | 'minor' | 'info';
+}
+
+export interface MarkupAnalysisResult {
+  markupItems: MarkupItem[];
+  openscadPatch?: string;
+  summary: string;
+  unresolvedQuestions: string[];
+}
+
+export async function analyzeMarkupFeedback(
+  markupImageBase64: string,
+  currentOpenSCAD: string,
+  projectContext = ''
+): Promise<MarkupAnalysisResult> {
+  const response = await withRetry(() => ai.models.generateContent({
+    model: 'gemini-3.1-flash-preview',
+    contents: {
+      parts: [
+        { inlineData: { data: markupImageBase64.replace(/^data:image\/\w+;base64,/, ''), mimeType: 'image/png' } },
+        { text: `You are a CAD reviewer parsing redline/markup feedback on a 3D design.
+
+TASK: Extract every markup annotation from the image into structured, actionable instructions.
+
+OPENSCAD CODE (for module name reference):
+\`\`\`openscad
+${currentOpenSCAD.slice(0, 2500)}${currentOpenSCAD.length > 2500 ? '\n// ... (truncated)' : ''}
+\`\`\`
+${projectContext ? `PROJECT CONTEXT: ${projectContext}\n` : ''}
+For each annotation: classify type, extract numeric values, reference affected module, suggest code patch, assign priority.
+Return as JSON.` },
+      ]
+    },
+    config: {
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          markupItems: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                id: { type: Type.STRING }, type: { type: Type.STRING },
+                description: { type: Type.STRING }, affectedModule: { type: Type.STRING },
+                proposedChange: { type: Type.STRING },
+                priority: { type: Type.STRING, enum: ['critical', 'major', 'minor', 'info'] },
+              },
+              required: ['id', 'type', 'description', 'priority'],
+            },
+          },
+          openscadPatch: { type: Type.STRING },
+          summary: { type: Type.STRING },
+          unresolvedQuestions: { type: Type.ARRAY, items: { type: Type.STRING } },
+        },
+        required: ['markupItems', 'summary', 'unresolvedQuestions'],
+      },
+    },
+  }));
+
+  const r = JSON.parse(response.text);
+  return {
+    markupItems: r.markupItems ?? [],
+    openscadPatch: r.openscadPatch,
+    summary: r.summary ?? 'No markup detected',
+    unresolvedQuestions: r.unresolvedQuestions ?? [],
+  };
+}
+
+// ── AI Smart Block Detection ─────────────────────────────────────────────────
+// Semantic block detection — finds assemblies geometry clustering alone misses.
+// Equivalent to AutoCAD "Smart Blocks: Detect and Convert" but AI-powered.
+
+export async function detectSemanticBlocks(openscadCode: string): Promise<{
+  candidates: Array<{ name: string; modules: string[]; reasoning: string; priority: number }>;
+  refactoredCode: string;
+  summary: string;
+}> {
+  const response = await withRetry(() => ai.models.generateContent({
+    model: 'gemini-3.1-pro-preview',
+    contents: `You are an OpenSCAD expert performing a Smart Blocks refactor (like AutoCAD "Detect and Convert").
+
+CODE:
+\`\`\`openscad
+${openscadCode}
+\`\`\`
+
+1. Find groups of modules that form one semantic assembly (e.g. door = slab + frame + hinges + swing arc) — suggest merging into one module.
+2. Find duplicated inline primitives that should become named modules.
+3. Rename generic module names (part_1, body, thing) to descriptive ones.
+4. Return refactored code with all improvements applied.
+
+Return as JSON.`,
+    config: {
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          candidates: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                name: { type: Type.STRING },
+                modules: { type: Type.ARRAY, items: { type: Type.STRING } },
+                reasoning: { type: Type.STRING },
+                priority: { type: Type.NUMBER },
+              },
+              required: ['name', 'modules', 'reasoning', 'priority'],
+            },
+          },
+          refactoredCode: { type: Type.STRING },
+          summary: { type: Type.STRING },
+        },
+        required: ['candidates', 'refactoredCode', 'summary'],
+      },
+      thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
+    },
+  }));
+
+  return JSON.parse(response.text);
+}
+
 export async function generateConceptSheet(
   prompt: string,
   style: string = 'minimalist',

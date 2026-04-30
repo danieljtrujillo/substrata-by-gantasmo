@@ -1,14 +1,14 @@
 import React, { useState, useRef, useEffect, Suspense } from 'react';
-import { 
-  Box, 
-  Cpu, 
-  ShoppingCart, 
-  Search, 
-  Wand2, 
-  FileJson, 
-  ListTodo, 
-  Printer, 
-  Layers, 
+import {
+  Box,
+  Cpu,
+  ShoppingCart,
+  Search,
+  Wand2,
+  FileJson,
+  ListTodo,
+  Printer,
+  Layers,
   Settings2,
   Package,
   ExternalLink,
@@ -23,8 +23,19 @@ import {
   Wrench,
   ClipboardList,
   Cable,
-  Scissors
+  Scissors,
+  Upload,
+  CheckCircle2,
+  AlertTriangle,
+  XCircle,
+  Eye,
+  EyeOff,
+  ScanSearch,
+  Building2,
 } from 'lucide-react';
+import { generateValidationReport, validateOpenSCADForPrinting, type ValidationReport } from '../lib/meshValidator';
+import { LayerManager } from '../lib/layerSystem';
+import type { Layer, LayerCategory } from '../lib/layerSystem';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -104,6 +115,17 @@ export const PrototypingStudio = ({ designStyle = 'minimalist', advisorContext =
 
   const [sortMode, setSortMode] = useState<'fastest' | 'cheapest' | 'none'>('none');
 
+  // ── 3D file import + validation ────────────────────────────────────────────
+  const [validationReport, setValidationReport] = useState<ValidationReport | null>(null);
+  const [showValidation, setShowValidation] = useState(false);
+  const [importedModelName, setImportedModelName] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // ── Layer panel ────────────────────────────────────────────────────────────
+  const [layerManager] = useState(() => new LayerManager('empty'));
+  const [showLayerPanel, setShowLayerPanel] = useState(false);
+  const [layerTick, setLayerTick] = useState(0);
+
   // Auto-fill prompt from advisor context
   useEffect(() => {
     if (autoPrompt && autoPrompt !== prompt) {
@@ -124,6 +146,34 @@ export const PrototypingStudio = ({ designStyle = 'minimalist', advisorContext =
     }
     return list;
   }, [currentProject, sortMode]);
+
+  const handleImport3DFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+    if (!['stl', 'glb', 'obj'].includes(ext)) {
+      toast.error('Unsupported format — import STL, GLB, or OBJ');
+      return;
+    }
+    const buffer = await file.arrayBuffer();
+    const report = generateValidationReport(buffer, file.name);
+    if (currentProject?.openscadCode) {
+      const scad = validateOpenSCADForPrinting(currentProject.openscadCode);
+      report.warnings.push(...scad.warnings);
+      report.printabilityNotes.push(...scad.dfmIssues);
+    }
+    if (currentProject) {
+      layerManager.autoAssignAll(currentProject.parts.map((p: Part) => p.name));
+      setLayerTick((t: number) => t + 1);
+    }
+    setImportedModelName(file.name);
+    setValidationReport(report);
+    setShowValidation(true);
+    if (report.overallScore === 'fail') toast.error(`Validation FAILED: ${report.errors[0]}`);
+    else if (report.overallScore === 'warn') toast.warning(`Imported with ${report.warnings.length} warning(s) — see Validate panel`);
+    else toast.success(`${file.name} validated ✓`);
+    e.target.value = '';
+  };
 
   const handleGeneratePrototype = async (overridePrompt?: string) => {
     const activePrompt = overridePrompt || prompt;
@@ -355,15 +405,165 @@ export const PrototypingStudio = ({ designStyle = 'minimalist', advisorContext =
                     />
                   </Canvas>
 
-                  {/* Overlay for 3D controls */}
+                  {/* Hidden file input */}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".stl,.glb,.obj"
+                    className="hidden"
+                    onChange={handleImport3DFile}
+                  />
+
+                  {/* Overlay toolbar */}
                   <div className="absolute bottom-4 left-4 flex gap-2">
                     <Card className="bg-black/80 backdrop-blur-md border border-white/10 p-2 flex gap-1">
-                      <Button size="icon" variant="ghost" className="h-8 w-8 text-white/60 hover:text-white"><Layers className="w-4 h-4" /></Button>
+                      <Button
+                        size="icon" variant="ghost"
+                        className={`h-8 w-8 transition-colors ${showLayerPanel ? 'text-blue-400 bg-blue-500/10' : 'text-white/60 hover:text-white'}`}
+                        title="Layer Manager"
+                        onClick={() => setShowLayerPanel(v => !v)}
+                      >
+                        <Layers className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        size="icon" variant="ghost"
+                        className={`h-8 w-8 transition-colors ${showValidation ? 'text-emerald-400 bg-emerald-500/10' : 'text-white/60 hover:text-white'}`}
+                        title="Validation Report"
+                        onClick={() => setShowValidation(v => !v)}
+                      >
+                        <ScanSearch className="w-4 h-4" />
+                      </Button>
                       <Button size="icon" variant="ghost" className="h-8 w-8 text-white/60 hover:text-white"><Settings2 className="w-4 h-4" /></Button>
                       <Separator orientation="vertical" className="h-8 bg-white/10" />
                       <Button size="icon" variant="ghost" className="h-8 w-8 text-blue-400 hover:text-blue-300"><Printer className="w-4 h-4" /></Button>
+                      <Button
+                        size="icon" variant="ghost"
+                        className="h-8 w-8 text-purple-400 hover:text-purple-300"
+                        title="Import STL / GLB / OBJ and validate"
+                        onClick={() => fileInputRef.current?.click()}
+                      >
+                        <Upload className="w-4 h-4" />
+                      </Button>
                     </Card>
                   </div>
+
+                  {/* layerTick read here so React re-renders the panel on visibility toggle */}
+                  {showLayerPanel && layerTick >= 0 && (
+                    <div className="absolute top-4 right-4 w-64 max-h-[70%] overflow-y-auto bg-black/90 backdrop-blur-md border border-white/10 rounded-xl p-3 z-10 space-y-2">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] font-bold text-white/50 uppercase tracking-widest">Layers</span>
+                        <div className="flex gap-1">
+                          <Button size="icon" variant="ghost" className="h-5 w-5 text-white/40 hover:text-white"
+                            onClick={() => { layerManager.setAllVisible('all', true); setLayerTick(t => t + 1); }}>
+                            <Eye className="w-3 h-3" />
+                          </Button>
+                          <Button size="icon" variant="ghost" className="h-5 w-5 text-white/40 hover:text-white"
+                            onClick={() => { layerManager.setAllVisible('all', false); setLayerTick(t => t + 1); }}>
+                            <EyeOff className="w-3 h-3" />
+                          </Button>
+                        </div>
+                      </div>
+                      {Object.entries(
+                        layerManager.getAllLayers().reduce<Record<string, Layer[]>>((acc, l) => {
+                          if (!acc[l.category]) acc[l.category] = [];
+                          acc[l.category].push(l);
+                          return acc;
+                        }, {})
+                      ).map(([cat, catLayers]) => catLayers.length === 0 ? null : (
+                        <div key={cat}>
+                          <button
+                            className="w-full text-left text-[9px] font-bold uppercase tracking-widest text-white/30 hover:text-white/60 transition-colors py-1"
+                            onClick={() => { layerManager.toggleCategory(cat as LayerCategory); setLayerTick((t: number) => t + 1); }}
+                          >
+                            {cat}
+                          </button>
+                          {catLayers.map(layer => (
+                            <div key={layer.name} className="flex items-center gap-2 py-0.5 group">
+                              <button
+                                className="flex-shrink-0 w-3 h-3 rounded-sm border border-white/20"
+                                style={{ backgroundColor: layer.visible ? layer.color : 'transparent' }}
+                                onClick={() => { layerManager.setVisibility(layer.name, !layer.visible); setLayerTick((t: number) => t + 1); }}
+                              />
+                              <span className={`text-[10px] font-mono flex-1 truncate transition-colors ${layer.visible ? 'text-white/70' : 'text-white/25'}`}>
+                                {layer.name}
+                              </span>
+                              <span className="text-[9px] text-white/20 truncate hidden group-hover:block">{layer.description}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                      {layerManager.getAllLayers().length === 0 && (
+                        <p className="text-[10px] text-white/30 text-center py-4">Import a file or generate a project to auto-assign layers</p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Validation Report Panel */}
+                  {showValidation && validationReport && (
+                    <div className="absolute top-4 left-4 w-80 max-h-[75%] overflow-y-auto bg-black/90 backdrop-blur-md border border-white/10 rounded-xl z-10">
+                      <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-white/10">
+                        <div className="flex items-center gap-2">
+                          {validationReport.overallScore === 'pass' && <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
+                          {validationReport.overallScore === 'warn' && <AlertTriangle className="w-4 h-4 text-yellow-400" />}
+                          {validationReport.overallScore === 'fail' && <XCircle className="w-4 h-4 text-red-400" />}
+                          <span className="text-xs font-bold text-white truncate max-w-[160px]">{importedModelName}</span>
+                        </div>
+                        <button className="text-white/30 hover:text-white transition-colors" onClick={() => setShowValidation(false)}>✕</button>
+                      </div>
+                      <div className="p-3 space-y-3">
+                        {/* File info */}
+                        <div className="grid grid-cols-2 gap-1 text-[10px] font-mono text-white/50">
+                          <span>Type</span><span className="text-white/80 uppercase">{validationReport.fileType}</span>
+                          <span>Size</span><span className="text-white/80">{(validationReport.fileSizeBytes / 1024).toFixed(1)} KB</span>
+                          {validationReport.triangleCount && <><span>Triangles</span><span className="text-white/80">{validationReport.triangleCount.toLocaleString()}</span></>}
+                          {validationReport.boundingBoxMm && (
+                            <><span>Bounds</span><span className="text-white/80">{validationReport.boundingBoxMm.x.toFixed(1)}×{validationReport.boundingBoxMm.y.toFixed(1)}×{validationReport.boundingBoxMm.z.toFixed(1)} mm</span></>
+                          )}
+                        </div>
+
+                        {/* File signature */}
+                        <div className={`text-[10px] px-2 py-1 rounded font-mono ${validationReport.signatureCheck.mismatch ? 'bg-red-500/20 text-red-300' : 'bg-emerald-500/10 text-emerald-300'}`}>
+                          {validationReport.signatureCheck.mismatch
+                            ? `⚠ Signature mismatch: detected ${validationReport.signatureCheck.detectedType}`
+                            : `✓ File signature valid (${validationReport.signatureCheck.detectedType})`}
+                        </div>
+
+                        {/* Errors */}
+                        {validationReport.errors.length > 0 && (
+                          <div className="space-y-1">
+                            <p className="text-[9px] font-bold uppercase tracking-widest text-red-400">Errors</p>
+                            {validationReport.errors.map((e, i) => (
+                              <p key={i} className="text-[10px] text-red-300 flex gap-1"><XCircle className="w-3 h-3 shrink-0 mt-0.5" />{e}</p>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Warnings */}
+                        {validationReport.warnings.length > 0 && (
+                          <div className="space-y-1">
+                            <p className="text-[9px] font-bold uppercase tracking-widest text-yellow-400">Warnings</p>
+                            {validationReport.warnings.map((w, i) => (
+                              <p key={i} className="text-[10px] text-yellow-300 flex gap-1"><AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />{w}</p>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Printability */}
+                        {validationReport.printabilityNotes.length > 0 && (
+                          <div className="space-y-1">
+                            <p className="text-[9px] font-bold uppercase tracking-widest text-blue-400">Printability</p>
+                            {validationReport.printabilityNotes.map((n, i) => (
+                              <p key={i} className="text-[10px] text-blue-300 flex gap-1"><Building2 className="w-3 h-3 shrink-0 mt-0.5" />{n}</p>
+                            ))}
+                          </div>
+                        )}
+
+                        {validationReport.overallScore === 'pass' && validationReport.errors.length === 0 && validationReport.warnings.length === 0 && (
+                          <p className="text-[10px] text-emerald-400 text-center py-1">All checks passed — model looks clean</p>
+                        )}
+                      </div>
+                    </div>
+                  )}
 
                   {!currentProject && !isGenerating && (
                     <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
