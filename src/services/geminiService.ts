@@ -6,6 +6,13 @@ import { getRegistrySummary, getDfmSummary } from '../engineeringRegistry';
 
 const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
 
+function getResponseText(response: { text?: string }): string {
+  if (!response.text) {
+    throw new Error("Gemini response did not include any text content.");
+  }
+  return response.text;
+}
+
 async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
@@ -498,7 +505,7 @@ Return exactly as JSON.`;
     }
   }));
 
-  const result = JSON.parse(response.text);
+  const result = JSON.parse(getResponseText(response));
 
   // Validate and log warnings for the generated OpenSCAD code
   if (result.openscadCode) {
@@ -568,7 +575,7 @@ Return as JSON.`,
     }
   }));
 
-  return JSON.parse(response.text);
+  return JSON.parse(getResponseText(response));
 }
 
 // ── PCB Schematic Generation (Hacker mode) ────────────────────
@@ -967,7 +974,7 @@ Return as JSON.` },
     },
   }));
 
-  const r = JSON.parse(response.text);
+  const r = JSON.parse(getResponseText(response));
   return {
     matches: r.matches ?? false,
     confidence: r.confidence ?? 'low',
@@ -1076,7 +1083,7 @@ ${advisorContext ? `SESSION CONTEXT:\n${advisorContext}\n` : ''}`;
     },
   }));
 
-  return JSON.parse(response.text);
+  return JSON.parse(getResponseText(response));
 }
 
 // ── Markup Import & Analysis ─────────────────────────────────────────────────
@@ -1149,7 +1156,7 @@ Return as JSON.` },
     },
   }));
 
-  const r = JSON.parse(response.text);
+  const r = JSON.parse(getResponseText(response));
   return {
     markupItems: r.markupItems ?? [],
     openscadPatch: r.openscadPatch,
@@ -1209,10 +1216,11 @@ Return as JSON.`,
     },
   }));
 
-  return JSON.parse(response.text);
+  return JSON.parse(getResponseText(response));
 }
 
 export async function generateConceptSheet(
+
   prompt: string,
   style: string = 'minimalist',
   referenceImage?: string
