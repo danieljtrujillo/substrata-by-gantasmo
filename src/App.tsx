@@ -1792,23 +1792,30 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
       const data: any = studioMode === 'architecture'
         ? await (async () => {
             const arch = await generateArchitecturalBlueprint(enrichedPrompt, 'residential', 'metric', '', referenceImage || undefined);
-            // Map building blueprint shape onto the prototype-project shape so the rest of the UI works.
+            // Map building blueprint shape onto the prototype-project shape. The Part interface
+            // expects sourcing fields (price/source/url/speed/specs) — we synthesize sensible
+            // defaults for materials so downstream UI (BOM tables, sourcing badges) doesn't crash.
+            const parts = (arch.materialSchedule || []).map((m, i) => ({
+              id: `mat_${i}`,
+              name: m.item,
+              source: 'Building supply',
+              price: 0,
+              speed: 'Standard',
+              category: 'material',
+              specs: `${m.spec} — ${m.qty} ${m.unit}`,
+              url: '',
+              fabrication: 'purchase',
+            }));
             return {
               name: arch.name,
               description: arch.description,
               designNotes: arch.buildingCodeNotes?.join('\n\n') || '',
-              parts: (arch.materialSchedule || []).map((m, i) => ({
-                id: `mat_${i}`,
-                name: m.item,
-                description: m.spec,
-                qty: m.qty,
-                unit: m.unit,
-              })),
+              parts,
               openscadCode: arch.openscadCode || '// Architectural model',
               svgDesign: arch.floorPlanSvg || '',
               wiringDiagram: 'See electrical plan in Architecture panel',
               assemblySteps: arch.assemblySteps || [],
-              code: undefined,
+              code: '// Architecture mode — see OpenSCAD for the building model',
               printingFiles: [],
               communityRefs: arch.communityRefs || [],
             };
