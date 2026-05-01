@@ -379,6 +379,71 @@ GOOGLE_CLIENT_SECRET=your_google_oauth_client_secret
 JWT_SECRET=your_jwt_secret</code></pre>
   </div>
 
+  <h2>Studio Modes</h2>
+  <p>SUBSTRATA pivots its toolset around three studio modes (toggled in the top header, persisted as <code>substrata.studioMode</code>).</p>
+  <table>
+    <tr><th>Mode</th><th>Focus</th><th>Specialty Output</th></tr>
+    <tr><td>🛠️ Maker (default)</td><td>3D printable parts, assemblies, hardware projects</td><td>OpenSCAD parts · STL/GLB · Wiring · BOM · Firmware</td></tr>
+    <tr><td>🏛️ Architecture</td><td>Buildings, fixtures, code-compliant structures</td><td>Floor plans · Electrical plans · IBC/ADA/NEC reports · Layered DXF</td></tr>
+    <tr><td>⚡ Hacker</td><td>PCBs, embedded systems, deep electronics</td><td>KiCad <code>.kicad_sch</code> · Schematic IR · Net validation · Footprints</td></tr>
+  </table>
+
+  <h3>Architecture Mode</h3>
+  <p>Backed by <code>buildingCodeRules.ts</code>, <code>electricalPlan.ts</code>, and <code>layerSystem.ts</code>:</p>
+  <ul>
+    <li><strong>Building code validation</strong> — <code>checkBuilding(descriptor)</code> evaluates doors, stairs, ramps, and corridors against IBC and ADA citations. Emits a <code>BuildingCodeReport</code> with rule, severity, message, suggested remediation.</li>
+    <li><strong>IBC-1010.1.1 / ADA-404.2.3</strong> — Door clear width 32–36" (815–915 mm), 80" (2032 mm) headroom.</li>
+    <li><strong>IBC-1011.5.2</strong> — Stair risers 4–7" (102–178 mm), treads ≥ 11" (279 mm), width ≥ 36".</li>
+    <li><strong>ADA-403.3</strong> — Ramp slope ≤ 1:12 (8.33 %), landing minimums, handrail rules.</li>
+    <li><strong>Electrical plan & panel schedule</strong> — <code>buildPanelSchedule()</code>, <code>validateElectricalPlan()</code> (NEC clearance, GFCI/AFCI, grounding), <code>renderElectricalSvg()</code>.</li>
+    <li><strong>Layer system (AIA / ISO-16739)</strong> — 40+ preset layers managed by <code>LayerManager</code>: A-WALL, A-DOOR, A-WIND, A-FLOR, A-ROOF, A-CEIL, A-STAIR, A-FURN, A-EQPM, A-COLS, S-COLS, S-BEAM, S-FNDN, S-SLAB, M-HVAC-*, P-PIPE-*, E-LITE, E-POWR, E-COMM, E-PANL, C-PROP, C-TOPO, C-PKNG, C-WALK, L-PLNT, A-ANNO-* and more. Toggle visibility, lock, assign parts to layers, export DXF-style maps.</li>
+  </ul>
+
+  <h3>Hacker Mode</h3>
+  <p>Hacker mode wires Gemini straight into a canonical schematic IR (<code>circuitGraph.ts</code>) and emits real, importable KiCad files (<code>kicadEmit.ts</code>):</p>
+  <ul>
+    <li><strong><code>generatePCBSchematic(prompt)</code></strong> — Gemini Pro is constrained to output a typed <code>Schematic</code> (sheets → components → pins → nets) instead of free-form text.</li>
+    <li><strong><code>validateSchematic()</code></strong> — Unique reference designators, declared pins, valid net connections, canonical power-net naming (<code>VCC</code>, <code>GND</code>, <code>+3V3</code>).</li>
+    <li><strong>KiCad 8 / 9 emitter</strong> — <code>emitProjectFiles(schematic)</code> writes a real <code>.kicad_sch</code> S-expression (symbols, properties, UUIDs, pin positions, net labels) plus a project README. Drop the folder into KiCad and it opens.</li>
+    <li><strong>Component pin library</strong> — ESP32 DevKit, Arduino Nano, RPi Pico, A4988 / TMC2209 drivers, OLED, MPU6050, HC-SR04, WS2812B, and more.</li>
+  </ul>
+
+  <h2>Reference Library &amp; Smart Blocks</h2>
+
+  <h3>Open-Access Scraper</h3>
+  <p>The <strong>Library</strong> modal is fed by a pluggable <code>ScraperAdapter</code> framework in <code>src/lib/scraper</code>. Two adapters ship by default — both license-clean by construction.</p>
+  <table>
+    <tr><th>Source</th><th>License</th><th>Specialty</th></tr>
+    <tr><td>Smithsonian Open Access</td><td>CC0 1.0</td><td>3D models, photographs, museum artifacts</td></tr>
+    <tr><td>Library of Congress HABS / HAER / HALS</td><td>Public Domain</td><td>Historic American building plans, measured drawings</td></tr>
+  </table>
+  <ul>
+    <li><strong>License-aware search</strong> — <code>SpdxLicense</code> enum (<code>CC0-1.0</code>, <code>CC-BY-4.0</code>, <code>CC-BY-SA-4.0</code>, <code>PD</code>, <code>MIT</code>, <code>Apache-2.0</code>). <code>isPermissive()</code> defaults search to safe-to-remix sources only.</li>
+    <li><strong>Filterable hits</strong> — Filter by kind (<code>3d_model</code>, <code>blueprint</code>, <code>floor_plan</code>, <code>photograph</code>) and format (<code>stl</code>, <code>glb</code>, <code>gltf</code>, <code>obj</code>, <code>step</code>, <code>svg</code>, <code>dxf</code>, <code>pdf</code>, <code>ifc</code>).</li>
+    <li><strong>Polite fetching</strong> — Per-host rate limiting (<code>throttle.ts</code>) and SHA-256 deduplication (<code>hash.ts</code>).</li>
+    <li><strong>Attribution capture</strong> — Every <code>FetchedAsset</code> carries <code>licenseProof</code> and <code>attributionString</code>.</li>
+    <li><strong>Direct import</strong> — "Use" button drops a hit into the active project as a base mesh, blueprint reference, or texture.</li>
+  </ul>
+
+  <h3>Smart Blocks</h3>
+  <p><code>smartBlocks.ts</code> audits generated OpenSCAD code and refactors repeated geometry into reusable modules.</p>
+  <ul>
+    <li><code>detectRepeatedGeometry()</code> — Signature-matches primitives by type + normalized aspect ratio.</li>
+    <li><code>scoreOpenSCADCandidates()</code> — Ranks candidates by potential savings (instance count × size).</li>
+    <li><code>convertBlocksInOpenSCAD()</code> — Rewrites inline primitives as named <code>module name() { ... }</code> definitions and <code>translate() name();</code> call sites.</li>
+    <li><code>auditOpenSCADBlocks()</code> — Returns a <code>SmartBlocksReport</code> with total primitives, candidate blocks, existing modules, projected line savings, and conversion suggestions.</li>
+  </ul>
+
+  <h3>3D File Validation &amp; DFM</h3>
+  <p><code>meshValidator.ts</code> gives every imported STL/GLB/OBJ a printability scorecard:</p>
+  <ul>
+    <li>Closed-mesh / non-manifold-edge / self-intersection detection.</li>
+    <li>Wall-thickness check vs. printer minimums (FDM 1.2 mm · SLA 0.5 mm).</li>
+    <li>Overhang detection (&gt; 45° unsupported), bridge-capacity warnings (&gt; 10 mm spans).</li>
+    <li>Polygon count, estimated print time, weight (g), and cost (USD).</li>
+    <li><code>validateOpenSCADForPrinting()</code> applies the same DFM ruleset to generated code before fabrication.</li>
+  </ul>
+
   <hr>
   <p style="text-align: center; color: var(--muted); font-size: 0.75rem; margin-top: 2rem;">
     SUBSTRATA v1.0.0 by GANTASMO — Generated Documentation<br>

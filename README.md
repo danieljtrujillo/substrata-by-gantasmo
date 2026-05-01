@@ -31,6 +31,35 @@ The **persistent AI Design Advisor** sits in the left panel of every screen. Co-
 
 ---
 
+## Studio Modes
+
+SUBSTRATA pivots its entire toolset around one of three studio modes (toggle in the top header — persists in localStorage as `substrata.studioMode`):
+
+| Mode | Focus | Specialty Output |
+|------|-------|-----------------|
+| 🛠️ **Maker** | 3D printable parts, assemblies, hardware projects | OpenSCAD parts · STL/GLB · Wiring · BOM · Firmware |
+| 🏛️ **Architecture** | Buildings, fixtures, code-compliant structures | Floor plans · Electrical plans · IBC/ADA/NEC reports · Layered DXF |
+| ⚡ **Hacker** | PCBs, embedded systems, deep electronics | KiCad `.kicad_sch` · Schematic IR · Net validation · Footprints |
+
+Each mode swaps in mode-specific generation paths, validation rules, and right-rail panels while sharing the same unified viewport, advisor, and library.
+
+<div align="center">
+<table>
+<tr>
+<td align="center"><b>Maker (default)</b></td>
+<td align="center"><b>Architecture</b></td>
+<td align="center"><b>Hacker</b></td>
+</tr>
+<tr>
+<td><img src="public/docs/screenshots/15-substrata-overview.png" alt="Maker mode — 3D viewport with machine settings panel" width="280"/></td>
+<td><img src="public/docs/screenshots/16-architecture-mode.png" alt="Architecture mode — Code button appears, structural analysis swap-in" width="280"/></td>
+<td><img src="public/docs/screenshots/17-hacker-mode.png" alt="Hacker mode — PCB-focused right rail, KiCad export ready" width="280"/></td>
+</tr>
+</table>
+</div>
+
+---
+
 ## Screenshots
 
 ### Core Workspaces
@@ -244,6 +273,71 @@ Local inventory tracking for your physical workspace:
 - Add components with category, specs, and notes
 - Components are injected into AI advisor prompts so the AI knows what you have on hand
 - Persistent via localStorage
+
+### Architecture Mode (IBC · ADA · NEC)
+
+Switching the studio to **Architecture** turns SUBSTRATA into an opinionated building-design copilot. Backed by [`buildingCodeRules.ts`](src/lib/buildingCodeRules.ts), [`electricalPlan.ts`](src/lib/electricalPlan.ts), and [`layerSystem.ts`](src/lib/layerSystem.ts):
+
+- **Building code validation** — `checkBuilding()` evaluates a `BuildingDescriptor` (doors, stairs, ramps, corridors) against IBC and ADA citations and emits a `BuildingCodeReport` with rule, severity, message, and suggested remediation
+  - IBC-1010.1.1 / ADA-404.2.3 — door clear width 32–36" (815–915 mm), 80" (2032 mm) headroom
+  - IBC-1011.5.2 — stair risers 4–7" (102–178 mm), treads ≥ 11" (279 mm), width ≥ 36"
+  - ADA-403.3 — ramp slope ≤ 1:12 (8.33 %), landing length minimums, handrail rules
+- **Electrical plan & panel schedule** — `buildPanelSchedule()` constructs a typed `PanelSchedule` (mains, voltage, phases, circuits → loads); `validateElectricalPlan()` flags NEC clearance, GFCI / AFCI placement, and grounding issues
+- **SVG schedule rendering** — `renderElectricalSvg()` outputs a print-ready panel-schedule table for inclusion in construction documents
+- **Layer system (AIA / ISO-16739)** — 40+ preset layers managed by `LayerManager`:
+  - Architectural — `A-WALL`, `A-DOOR`, `A-WIND`, `A-FLOR`, `A-ROOF`, `A-CEIL`, `A-STAIR`, `A-FURN`, `A-EQPM`, `A-COLS`, `A-ANNO-*`, `DEFPOINTS`
+  - Structural — `S-COLS`, `S-BEAM`, `S-FNDN`, `S-SLAB`, `S-JOIS`, `S-BRAC`
+  - MEP — `M-HVAC-*`, `P-PIPE-*`, `E-LITE`, `E-POWR`, `E-COMM`, `E-PANL`
+  - Site — `C-PROP`, `C-TOPO`, `C-PKNG`, `C-WALK`, `L-PLNT`
+  - Toggle visibility, lock layers, assign parts to layers, export DXF-style layer maps
+- **Generative strength analysis** — Right-rail panel runs structural simulations tuned to the chosen design style (minimalist favors compact bracing, deconstructivist tolerates dramatic cantilevers, etc.)
+
+### Hacker Mode (PCB · KiCad)
+
+Hacker mode wires Gemini straight into a canonical schematic intermediate representation in [`circuitGraph.ts`](src/lib/circuitGraph.ts) and emits real, importable KiCad files via [`kicadEmit.ts`](src/lib/kicadEmit.ts):
+
+- **`generatePCBSchematic(prompt)`** — Gemini Pro is constrained to output a typed `Schematic` (sheets → components → pins → nets) instead of free-form text
+- **Schematic validation** — `validateSchematic()` enforces unique reference designators, declared pins, valid net connections, and canonical power-net naming (`VCC`, `GND`, `+3V3`, etc.)
+- **KiCad 8 / 9 emitter** — `emitProjectFiles(schematic)` writes a real `.kicad_sch` S-expression (symbols, properties, UUIDs, pin positions, net labels) plus a project README — drop the folder into KiCad and it opens
+- **Component library** — Pin definitions for ESP32 DevKit, Arduino Nano, RPi Pico, A4988 / TMC2209 drivers, OLED, MPU6050, HC-SR04, WS2812B and more
+- **PCB right-rail panel** — Ships in the toolbar when hacker mode is active, gated behind a `PCB` button next to the standard 3D-output stack
+
+### Reference Library (Open-Access Scraper)
+
+The **Library** modal is fed by a pluggable `ScraperAdapter` framework in [`src/lib/scraper`](src/lib/scraper). Two adapters ship by default — both license-clean by construction:
+
+| Source | License | Specialty | Adapter |
+|--------|---------|-----------|---------|
+| Smithsonian Open Access | CC0 1.0 | 3D models, photographs, museum artifacts | [`smithsonian.ts`](src/lib/scraper/smithsonian.ts) |
+| Library of Congress HABS / HAER / HALS | Public Domain | Historic American building plans, measured drawings | [`locHabs.ts`](src/lib/scraper/locHabs.ts) |
+
+- **License-aware search** — `SpdxLicense` enum (`CC0-1.0`, `CC-BY-4.0`, `CC-BY-SA-4.0`, `PD`, `MIT`, `Apache-2.0`); `isPermissive()` defaults search to safe-to-remix sources only
+- **Filterable hits** — Filter by kind (`3d_model`, `blueprint`, `floor_plan`, `photograph`), format (`stl`, `glb`, `gltf`, `obj`, `step`, `svg`, `dxf`, `pdf`, `ifc`, etc.), and license
+- **Polite fetching** — Per-host rate limiting (`throttle.ts`) and SHA-256 deduplication (`hash.ts`) so repeated searches don't hammer upstream APIs
+- **Attribution capture** — Every `FetchedAsset` carries `licenseProof` and `attributionString` so derivative works keep their provenance trail
+- **Direct import** — "Use" button drops a hit into the active project as a base mesh, blueprint reference, or texture
+- **AI-aware** — Search results are surfaced to the advisor so it can recommend "start from the Eames LCW measured drawing" instead of synthesizing from scratch
+
+### Smart Blocks (OpenSCAD Refactor)
+
+[`smartBlocks.ts`](src/lib/smartBlocks.ts) audits generated OpenSCAD code and refactors repeated geometry into reusable modules:
+
+- **`detectRepeatedGeometry()`** — Signature-matches primitives by type + normalized aspect ratio (with optional exact-size mode)
+- **`scoreOpenSCADCandidates()`** — Ranks candidates by potential savings (instance count × size)
+- **`convertBlocksInOpenSCAD()`** — Rewrites inline primitives as named `module name() { ... }` definitions and `translate() name();` call sites
+- **`auditOpenSCADBlocks()`** — Returns a `SmartBlocksReport`: total primitives, candidate blocks, existing modules, projected line savings, and conversion suggestions
+- Surfaces in the Validation tab next to mesh integrity, DFM, and printability metrics
+
+### 3D File Validation & DFM
+
+[`meshValidator.ts`](src/lib/meshValidator.ts) gives every imported STL/GLB/OBJ a printability scorecard:
+
+- Closed mesh / non-manifold edge / self-intersection detection
+- Wall-thickness check vs. printer minimums (FDM 1.2 mm · SLA 0.5 mm)
+- Overhang detection (>45° unsupported)
+- Bridge-capacity warnings (>10 mm spans)
+- Polygon count, estimated print time, weight (g), and cost (USD)
+- `validateOpenSCADForPrinting()` parses generated code and applies the same DFM ruleset before fabrication
 
 ### Project Library
 

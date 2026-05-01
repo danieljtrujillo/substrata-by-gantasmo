@@ -620,6 +620,133 @@ Cloud-backed project management with Google authentication.
 `
   },
   {
+    id: 'studio-modes',
+    title: 'Studio Modes',
+    icon: 'Layers',
+    content: `
+# Studio Modes
+
+SUBSTRATA pivots its toolset around **three studio modes**. The active mode is persisted in \`localStorage\` (\`substrata.studioMode\`) and toggled in the top header.
+
+| Mode | Focus | Specialty Output |
+|------|-------|-----------------|
+| 🛠️ Maker (default) | 3D printable parts, assemblies, hardware projects | OpenSCAD parts · STL/GLB · Wiring · BOM · Firmware |
+| 🏛️ Architecture | Buildings, fixtures, code-compliant structures | Floor plans · Electrical plans · IBC/ADA/NEC reports · Layered DXF |
+| ⚡ Hacker | PCBs, embedded systems, deep electronics | KiCad \`.kicad_sch\` · Schematic IR · Net validation · Footprints |
+
+![Maker mode default view](/docs/screenshots/15-substrata-overview.png)
+
+![Architecture mode active](/docs/screenshots/16-architecture-mode.png)
+
+![Hacker mode active](/docs/screenshots/17-hacker-mode.png)
+
+## Architecture Mode
+
+Architecture mode turns SUBSTRATA into an opinionated building-design copilot, backed by three core libraries: \`buildingCodeRules.ts\`, \`electricalPlan.ts\`, and \`layerSystem.ts\`.
+
+### Building Code Validation
+
+\`checkBuilding(descriptor)\` evaluates a \`BuildingDescriptor\` (doors, stairs, ramps, corridors) against IBC and ADA citations and emits a \`BuildingCodeReport\` with rule, severity, message, and suggested remediation.
+
+| Code | Rule | Limits |
+|------|------|--------|
+| IBC-1010.1.1 / ADA-404.2.3 | Door clear width | 32–36" (815–915 mm), 80" (2032 mm) headroom |
+| IBC-1011.5.2 | Stair geometry | Risers 4–7" (102–178 mm), treads ≥ 11" (279 mm), width ≥ 36" |
+| ADA-403.3 | Ramp slope & landings | Slope ≤ 1:12 (8.33 %), landing minimums, handrail rules |
+
+### Electrical Plan & Panel Schedule
+
+- \`buildPanelSchedule()\` constructs a typed \`PanelSchedule\` (mains, voltage, phases, circuits → loads)
+- \`validateElectricalPlan()\` flags NEC clearance, GFCI / AFCI placement, and grounding issues
+- \`renderElectricalSvg()\` outputs a print-ready panel-schedule table SVG for inclusion in construction docs
+
+### Layer System (AIA / ISO-16739)
+
+40+ preset layers managed by \`LayerManager\`. Toggle visibility, lock layers, assign parts to layers, export DXF-style layer maps.
+
+| Discipline | Examples |
+|-----------|----------|
+| Architectural | A-WALL · A-DOOR · A-WIND · A-FLOR · A-ROOF · A-CEIL · A-STAIR · A-FURN · A-EQPM · A-COLS · A-ANNO-* · DEFPOINTS |
+| Structural | S-COLS · S-BEAM · S-FNDN · S-SLAB · S-JOIS · S-BRAC |
+| MEP | M-HVAC-* · P-PIPE-* · E-LITE · E-POWR · E-COMM · E-PANL |
+| Site | C-PROP · C-TOPO · C-PKNG · C-WALK · L-PLNT |
+
+## Hacker Mode
+
+Hacker mode wires Gemini straight into a canonical schematic IR (\`circuitGraph.ts\`) and emits real, importable KiCad files (\`kicadEmit.ts\`).
+
+- **\`generatePCBSchematic(prompt)\`** — Gemini Pro is constrained to output a typed \`Schematic\` (sheets → components → pins → nets) instead of free-form text.
+- **\`validateSchematic()\`** — Enforces unique reference designators, declared pins, valid net connections, and canonical power-net naming (\`VCC\`, \`GND\`, \`+3V3\`).
+- **KiCad 8 / 9 emitter** — \`emitProjectFiles(schematic)\` writes a real \`.kicad_sch\` S-expression (symbols, properties, UUIDs, pin positions, net labels) plus a project README. Drop the folder into KiCad and it opens.
+- **Component pin library** — ESP32 DevKit, Arduino Nano, RPi Pico, A4988 / TMC2209 drivers, OLED, MPU6050, HC-SR04, WS2812B, and more.
+- **PCB right-rail panel** — Available when hacker mode is active, gated behind a **PCB** button next to the standard 3D-output stack.
+`
+  },
+  {
+    id: 'reference-library',
+    title: 'Reference Library & Smart Blocks',
+    icon: 'Library',
+    content: `
+# Reference Library & Smart Blocks
+
+## Open-Access Scraper
+
+The **Library** modal is fed by a pluggable \`ScraperAdapter\` framework in \`src/lib/scraper\`. Two adapters ship by default — both license-clean by construction.
+
+| Source | License | Specialty |
+|--------|---------|-----------|
+| Smithsonian Open Access | CC0 1.0 | 3D models, photographs, museum artifacts |
+| Library of Congress HABS / HAER / HALS | Public Domain | Historic American building plans, measured drawings |
+
+### Features
+
+- **License-aware search** — \`SpdxLicense\` enum (\`CC0-1.0\`, \`CC-BY-4.0\`, \`CC-BY-SA-4.0\`, \`PD\`, \`MIT\`, \`Apache-2.0\`); \`isPermissive()\` defaults search to safe-to-remix sources only.
+- **Filterable hits** — Filter by kind (\`3d_model\`, \`blueprint\`, \`floor_plan\`, \`photograph\`), format (\`stl\`, \`glb\`, \`gltf\`, \`obj\`, \`step\`, \`svg\`, \`dxf\`, \`pdf\`, \`ifc\`, etc.), and license.
+- **Polite fetching** — Per-host rate limiting (\`throttle.ts\`) and SHA-256 deduplication (\`hash.ts\`) so repeated searches don't hammer upstream APIs.
+- **Attribution capture** — Every \`FetchedAsset\` carries \`licenseProof\` and \`attributionString\` so derivative works keep their provenance trail.
+- **Direct import** — "Use" button drops a hit into the active project as a base mesh, blueprint reference, or texture.
+- **AI-aware** — Search results are surfaced to the advisor so it can recommend "start from the Eames LCW measured drawing" instead of synthesizing from scratch.
+
+### Adding a New Adapter
+
+Implement the \`ScraperAdapter\` interface in \`src/lib/scraper/types.ts\`:
+
+\`\`\`ts
+export interface ScraperAdapter {
+  id: string;
+  displayName: string;
+  defaultLicense: SpdxLicense;
+  search(filters: SearchFilters): Promise<AssetHit[]>;
+  fetchAsset(hit: AssetHit): Promise<FetchedAsset>;
+}
+\`\`\`
+
+Then register it in \`src/lib/scraper/registry.ts\`. The Library UI auto-discovers adapters and surfaces them in the source filter.
+
+## Smart Blocks
+
+\`smartBlocks.ts\` audits generated OpenSCAD code and refactors repeated geometry into reusable modules.
+
+- **\`detectRepeatedGeometry()\`** — Signature-matches primitives by type + normalized aspect ratio (with optional exact-size mode).
+- **\`scoreOpenSCADCandidates()\`** — Ranks candidates by potential savings (instance count × size).
+- **\`convertBlocksInOpenSCAD()\`** — Rewrites inline primitives as named \`module name() { ... }\` definitions and \`translate() name();\` call sites.
+- **\`auditOpenSCADBlocks()\`** — Returns a \`SmartBlocksReport\`: total primitives, candidate blocks, existing modules, projected line savings, and conversion suggestions.
+
+Surfaces in the Validation tab next to mesh integrity, DFM, and printability metrics.
+
+## 3D File Validation & DFM
+
+\`meshValidator.ts\` gives every imported STL/GLB/OBJ a printability scorecard:
+
+- Closed mesh / non-manifold edge / self-intersection detection
+- Wall-thickness check vs. printer minimums (FDM 1.2 mm · SLA 0.5 mm)
+- Overhang detection (>45° unsupported)
+- Bridge-capacity warnings (>10 mm spans)
+- Polygon count, estimated print time, weight (g), and cost (USD)
+- \`validateOpenSCADForPrinting()\` parses generated code and applies the same DFM ruleset before fabrication
+`
+  },
+  {
     id: 'api-reference',
     title: 'API Reference',
     icon: 'Code',
