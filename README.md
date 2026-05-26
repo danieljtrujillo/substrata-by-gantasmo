@@ -712,6 +712,38 @@ GOOGLE_CLIENT_SECRET=your_google_oauth_client_secret
 JWT_SECRET=a_random_secret_string_for_signing_session_tokens
 ```
 
+#### Where to put these keys
+
+Two routes. Pick whichever you prefer.
+
+**A. Cloudflare Pages dashboard (one-time, no CLI):**
+1. Sign in at https://dash.cloudflare.com and open your `substrata` Pages project.
+2. Click **Settings → Environment variables and secrets**.
+3. Under **Production** click **+ Add**. Set the **Type** to **Secret**, paste the variable name (e.g. `GEMINI_API_KEY`), paste the value, and **Save**.
+4. Repeat for `SMITHSONIAN_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `JWT_SECRET`.
+5. Add the same entries under **Preview** if you also want preview deploys to work.
+6. Open the **Deployments** tab and click **Retry deployment** on the latest entry so the new bindings take effect.
+
+**B. Wrangler CLI (scriptable):**
+```bash
+npx wrangler login                                      # browser tab, one-time
+npx wrangler pages secret put GEMINI_API_KEY --project-name=substrata
+npx wrangler pages secret put SMITHSONIAN_API_KEY --project-name=substrata
+npx wrangler pages secret put GOOGLE_CLIENT_ID --project-name=substrata
+npx wrangler pages secret put GOOGLE_CLIENT_SECRET --project-name=substrata
+npx wrangler pages secret put JWT_SECRET --project-name=substrata
+```
+Each command prompts for the value, encrypts it at rest, and binds it to Production. Add `--env=preview` if you also want the value in preview deploys.
+
+**Generating `JWT_SECRET`:**
+```bash
+openssl rand -base64 48
+```
+
+**Local development:** drop the same `KEY=value` lines into `.dev.vars` at the repo root. The file is gitignored. `npm run dev:full` (which runs `wrangler pages dev`) reads from it automatically.
+
+**What goes where:** `GEMINI_API_KEY` is read by [functions/api/ai/relay.ts](functions/api/ai/relay.ts). `SMITHSONIAN_API_KEY` is read by [functions/api/scraper/smithsonian/search.ts](functions/api/scraper/smithsonian/search.ts) and [functions/api/scraper/smithsonian/fetch.ts](functions/api/scraper/smithsonian/fetch.ts). `GOOGLE_CLIENT_*` are read by [functions/api/auth/login.ts](functions/api/auth/login.ts) and [functions/api/auth/callback.ts](functions/api/auth/callback.ts). `JWT_SECRET` is read by [functions/jwt.ts](functions/jwt.ts) for signing and verification.
+
 ### Optional: KV namespace for PKCE + rate limiting
 
 ```bash
