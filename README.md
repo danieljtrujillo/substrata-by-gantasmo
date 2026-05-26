@@ -164,6 +164,7 @@ The central engineering workspace. Describe any hardware project and Gemini Pro 
 - **Viewport header tab bar** — Switch between 3D Viewport, BOM, Design Files, Code, and Assembly; non-3D tabs fill the full viewport as an overlay
 - **Inline fabrication estimates** — Real-time polygon count, print time (resin vs FDM), and laser cut time shown in the tab bar, derived from the selected machine's specs
 - **Parametric OpenSCAD** — Module-based geometry with CSG operations (difference, union, intersection, hull), parametric dimensions, assembly positioning, and tolerance specs
+- **Real OpenSCAD AST parser** ([src/lib/openscadParser.ts](src/lib/openscadParser.ts)): recursive-descent tokenizer plus AST evaluator. Handles `module` declarations with named and positional parameters, variable assignment with scope chaining, `for`/`if`/`else`, nested `translate`/`rotate`/`scale`/`mirror`/`color`, CSG primitives, `polyhedron(points, faces)`, `linear_extrude(height) polygon(points)`, and built-in math (`sin`, `cos`, `tan`, `abs`, `sqrt`, `pow`, `min`, `max`, `floor`, `ceil`, `round`, `len`). The viewport renders polyhedron meshes from the Displacement Mesh tool and extruded silhouettes from the Profile Extrude tool. Falls back to the legacy regex parser on exotic syntax (list comprehensions, `each`, custom functions)
 - **SVG laser-cut layouts** — Multi-part vector files separated by `<!--PART_BREAK-->` markers, ready for LaserGRBL / LightBurn
 - **Pin-by-pin wiring diagrams** — Mermaid flowcharts + text connection tables for microcontrollers, sensors, and actuators
 - **Firmware scaffolding** — Compilable Arduino and MicroPython code generated per-project
@@ -204,6 +205,7 @@ Canvas-based image processing pipeline optimized for diode and CO2 laser output.
 - **9 material presets** — Kraft paper, plywood, solid wood, bamboo, cork, leather, silica gel, dark felt, tin plate — each with power/speed/passes tuned for the ACMER S1
 - **Smart settings** — AI analyzes a photo of your material and recommends optimal laser parameters
 - **Material analysis** — Upload a material photo; Gemini identifies the material type and suggests settings from the ACMER S1 manual
+- **Auto-apply analysis**: `analyzeLaserMaterialStructured` returns a clamped JSON shape (power 0–100, speed 100–10000 mm/min, passes 1–20, mode M3/M4, masking-tape flag). Values land directly in the active laser settings panel; a toast surfaces the chosen parameters and the AI's notes
 - **Canvas editing** — Drawing brush, eraser, selection box, text overlay with size control
 - **AI design generation** — Text-to-image via Gemini Flash Image with 4 design styles and 3 aspect ratios (1:1, 16:9, 9:16)
 - **Reference image system** — Upload design inspiration photos for AI context
@@ -217,6 +219,7 @@ Full-canvas AI image manipulation powered by Konva:
 - **Outpainting** — Extend images beyond their original boundaries
 - **Style transfer** — Restyle an entire image with a text prompt
 - **Tool palette** — Select, box draw, eraser brush, text overlay, layer management
+- **AI Edit / AI Extend / AI Restyle buttons**: The three synthesis modes are labelled as AI edits rather than CAD-style inpaint/outpaint. Tooltips note that Gemini Flash Image regenerates the whole frame guided by the current stage and prompt, not a true masked operation
 
 ### Label & Sticker Studio
 
@@ -242,7 +245,9 @@ The always-on engineering co-pilot in the left sidebar:
 - **Deep Think mode** — Toggle for extended reasoning via Gemini Pro (inline mini toggle with "Deep" label)
 - **Voice input** — Record audio via Web Speech API (live transcription) or MediaRecorder fallback; Gemini Flash transcription
 - **Text-to-speech** — Per-message audio playback with 5 voice options (Kore, Charon, Puck, Aoede, Leda) via Gemini Flash TTS
+- **Voice picker**: 30 prebuilt Gemini voices selectable from the advisor footer dropdown (Zephyr, Puck, Charon, Kore, Fenrir, Leda, Orus, Aoede, Callirrhoe, Autonoe, Enceladus, Iapetus, Umbriel, Algieba, Despina, Erinome, Algenib, Rasalgethi, Laomedeia, Achernar, Alnilam, Schedar, Gacrux, Pulcherrima, Achird, Zubenelgenubi, Vindemiatrix, Sadachbia, Sadaltager, Sulafat). Selection persists in `localStorage` under `substrata.ttsVoice`
 - **Mute toggle** — Silence TTS globally
+- **Functional mute**: Volume icon next to the Deep button short-circuits per-message playback. Muted state does not consume API quota
 - **Image attachment** — Send reference photos, concept sketches, or material samples into the conversation
 - **Camera capture** — Take a photo directly from webcam
 - **Material preset saving** — Save AI-recommended laser settings as custom presets
@@ -291,6 +296,7 @@ Switching the studio to **Architecture** turns SUBSTRATA into an opinionated bui
   - Site — `C-PROP`, `C-TOPO`, `C-PKNG`, `C-WALK`, `L-PLNT`
   - Toggle visibility, lock layers, assign parts to layers, export DXF-style layer maps
 - **Generative strength analysis** — Right-rail panel runs structural simulations tuned to the chosen design style (minimalist favors compact bracing, deconstructivist tolerates dramatic cantilevers, etc.)
+- **Live validator wiring**: The architectural blueprint generator emits a `buildingDescriptor` (doors, stairs, ramps, rooms) and an `electricalPlan` (panels, circuits, devices) inside the same Gemini response. The Architecture panel reads both, calls `checkBuilding` and `buildPanelSchedule` automatically, and renders the IBC/ADA/NEC findings without an extra click
 
 ### Hacker Mode (PCB · KiCad)
 
@@ -815,6 +821,12 @@ public/docs/screenshots/         # App screenshots for documentation
 - **SQL injection** — Prevented via D1 parameterized bindings (no string concatenation)
 - **Secrets** — OAuth credentials and JWT secret stored as Cloudflare Pages secrets; API keys injected at build time via Vite, never committed to source
 - **XSS** — React's default escaping; no `dangerouslySetInnerHTML` on user content
+- **Server-side AI key**: `GEMINI_API_KEY` is a Cloudflare Pages env binding read only by [functions/api/ai/relay.ts](functions/api/ai/relay.ts). Every Gemini call from the browser POSTs to `/api/ai/relay`. The key never enters the browser bundle
+- **CSRF state on OAuth**: 32-byte random `state` value in an HttpOnly cookie, verified on callback with constant-time compare
+- **PKCE on OAuth (RFC 7636)**: SHA-256 `code_challenge` sent to Google. Verifier stays server-side in Cloudflare KV with HttpOnly cookie fallback. Consumed once on callback
+- **JWT claims**: `iss=substrata-by-gantasmo`, `aud=substrata-web`, `iat`, `nbf`, `exp`, validated with 60s leeway
+- **Rate limiting**: KV-backed sliding-window limiter caps `/api/auth/callback` at 20 req/min per IP, `/api/ai/relay` at 30 req/h anonymous and 300 req/h per authenticated user. Fails open if the `RATE_LIMIT` KV binding is absent
+- **Request validation**: Zod schemas in [functions/api/projects/schema.ts](functions/api/projects/schema.ts) enforce shape on `laserSettings` and `procOptions`, reject unknown fields, and cap each project row at 2 MiB
 - See [security_spec.md](security_spec.md) for detailed security analysis
 
 ---

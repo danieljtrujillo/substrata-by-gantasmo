@@ -461,6 +461,19 @@ The Prototyping Studio is an AI-powered hardware design engine that generates co
 - **Design Notes**: AI-generated rationale for design decisions
 - **Community References**: Links to similar open-source projects
 
+### OpenSCAD Rendering
+
+The viewport runs a recursive-descent OpenSCAD parser in \`src/lib/openscadParser.ts\`. It walks the full AST (tokenizer, expression parser with Pratt-style precedence, evaluator) so the 3D preview tracks features the regex-based fallback could not render:
+
+- \`polyhedron(points, faces)\` from the Displacement Mesh tool
+- \`linear_extrude(height) polygon(points)\` from the Profile Extrude tool
+- \`module\` declarations with named and positional parameters
+- \`for\` loops, \`if\`/\`else\`, and variable assignment with scope chaining
+- Nested \`translate\`/\`rotate\`/\`scale\`/\`mirror\`/\`color\`, \`union\`/\`difference\`/\`intersection\`/\`hull\`
+- Function-style expressions: \`sin\`, \`cos\`, \`tan\`, \`abs\`, \`sqrt\`, \`pow\`, \`min\`, \`max\`, \`floor\`, \`ceil\`, \`round\`, \`len\`
+
+Polyhedron geometry feeds a \`THREE.BufferGeometry\` with fan-triangulated faces; \`linear_extrude\` feeds a \`THREE.ExtrudeGeometry\`. If the AST evaluator throws on exotic syntax (list comprehensions, \`each\`, \`let()\`, custom functions), the viewport falls back to the legacy regex parser for safety.
+
 ### Design File Tabs
 The Fabrication and Design Files view provides three sub-tabs:
 | Tab | Content | Color Theme |
@@ -524,7 +537,9 @@ The advisor is always available in the bottom-right corner of the screen. Click 
 - **Blueprint trigger**: When your idea is ready, the advisor calls \`generate_blueprint\` to auto-switch to the Prototyping Studio and kick off full generation
 - **"Build Blueprint from Discussion" button**: Manual trigger to compile your conversation into a generation prompt
 - **Deep Thinking Mode**: Toggle for complex queries (uses Gemini Pro with HIGH thinking level)
-- **Voice I/O**: Voice prompts (mic) and TTS responses (Kore voice, 5 options)
+- **Voice I/O**: Voice prompts (mic) and TTS responses
+- **Voice Selection**: 30 prebuilt Gemini voices exposed in the advisor footer dropdown (Zephyr/Bright, Puck/Upbeat, Charon/Informative, Kore/Firm, Fenrir/Excitable, Leda/Youthful, Orus/Firm, Aoede/Breezy, Callirrhoe/Easy-going, Autonoe/Bright, Enceladus/Breathy, Iapetus/Clear, Umbriel/Easy-going, Algieba/Smooth, Despina/Smooth, Erinome/Clear, Algenib/Gravelly, Rasalgethi/Informative, Laomedeia/Upbeat, Achernar/Soft, Alnilam/Firm, Schedar/Even, Gacrux/Mature, Pulcherrima/Forward, Achird/Friendly, Zubenelgenubi/Casual, Vindemiatrix/Gentle, Sadachbia/Lively, Sadaltager/Knowledgeable, Sulafat/Warm). The selection persists in \`localStorage\` under \`substrata.ttsVoice\`
+- **Mute Toggle**: Volume icon next to the Deep button short-circuits per-message playback without dropping the audio buffer cache
 - **Tool Use**: Can save material presets and trigger blueprints directly from conversation
 - **Google Search Grounding**: Real-time information retrieval for specs and pricing
 
@@ -555,9 +570,11 @@ A full-featured canvas editor powered by Konva and Gemini AI synthesis.
 - **Text**: Add text overlays with custom positioning
 
 ### AI Synthesis Modes
-- **Inpaint Mask**: AI fills selected regions based on a text prompt
-- **Outpaint Edge**: AI extends the image beyond its boundaries
-- **Style Transfer**: AI redraws the entire image in a specified style
+- **AI Edit**: Regenerates the image guided by the current stage and prompt
+- **AI Extend**: Regenerates with the current image as a layout cue, expanding context
+- **AI Restyle**: Regenerates the entire image in the requested style
+
+> The Gemini Flash Image model is text-to-image without a mask-conditioned inpaint endpoint. These modes feed the canvas back as a reference and steer the regeneration via system instruction. Buttons render with \`title\` tooltips noting that behaviour.
 
 ---
 
@@ -570,6 +587,10 @@ Laser engraving and cutting is the **finishing step** in the prototyping pipelin
 - **Speed**: 0-5000 mm/min (default 2000)
 - **Passes**: 1-10 (default 1)
 - **Smart Presets**: Pre-configured for 9 materials
+
+### AI Material Analysis (Auto-Apply)
+
+Upload a material photo and click **Analyze Material**. The structured analyzer (\`analyzeLaserMaterialStructured\` in \`geminiService.ts\`) calls Gemini Pro with a constrained JSON schema and returns clamped \`power\`, \`speed\`, \`passes\`, \`mode\`, and a \`needsMaskingTape\` flag. The values are written directly into the active laser settings panel and a toast surfaces the chosen parameters plus the AI's notes. The model recommendation no longer lives only in chat text.
 
 ### Material Presets
 
@@ -617,6 +638,17 @@ Cloud-backed project management with Google authentication.
 - **Project Actions**: Open, Rename, Duplicate, Share (clipboard), Delete
 - **Stock Templates**: Curated templates across categories (Animal, Decor, Home, Gift, Nature, Fantasy, Mechanical, Nautical)
 - **Batch Import**: Add all templates to your library in one click
+
+### Server-Side Validation
+
+Every \`POST /api/projects\` and \`PUT /api/projects/:id\` request runs through a Zod schema in \`functions/api/projects/schema.ts\`:
+
+- \`name\`: required, 1–200 chars
+- \`originalImage\`/\`processedImage\`: data URL or http(s) URL, 1.5 MiB cap each
+- \`laserSettings\`: strict shape with bounded \`power\` (0–100), \`speed\` (0–20000), \`passes\` (1–20), \`mode\` (\`M3\`\\|\`M4\`)
+- \`procOptions\`: strict shape with bounded \`brightness\`/\`contrast\`/\`threshold\` and \`rotate\` restricted to 0/90/180/270
+- Unknown fields are rejected with \`validation_failed\`
+- Total serialized payload is capped at 2 MiB; oversize returns 413
 `
   },
   {
@@ -647,6 +679,8 @@ Architecture mode turns SUBSTRATA into an opinionated building-design copilot, b
 ### Building Code Validation
 
 \`checkBuilding(descriptor)\` evaluates a \`BuildingDescriptor\` (doors, stairs, ramps, corridors) against IBC and ADA citations and emits a \`BuildingCodeReport\` with rule, severity, message, and suggested remediation.
+
+> The architectural blueprint generator now emits a \`buildingDescriptor\` (doors, stairs, ramps, rooms) and an \`electricalPlan\` (panels, circuits, devices) inside the same response. The Architecture panel reads both, calls \`checkBuilding\` and \`buildPanelSchedule\` automatically, and renders the findings in the right rail without any extra action.
 
 | Code | Rule | Limits |
 |------|------|--------|
@@ -752,6 +786,32 @@ Surfaces in the Validation tab next to mesh integrity, DFM, and printability met
     icon: 'Code',
     content: `
 # API Reference
+
+## /api/ai/relay (Pages Function)
+
+Server-side Gemini proxy. Every call from \`geminiService.ts\` and \`ttsService.ts\` POSTs here.
+
+**Request body**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| model | string | A model id from the \`MODELS\` registry |
+| contents | unknown | The Gemini \`contents\` payload (parts, inline data, etc.) |
+| config | object | Optional config (responseSchema, thinkingConfig, imageConfig, speechConfig) |
+
+**Response body**
+
+| Field | Type |
+|-------|------|
+| text | string \\| undefined |
+| candidates | array |
+| functionCalls | array |
+
+**Headers**: \`X-RateLimit-Remaining\`, \`X-RateLimit-Reset\` on success. \`Retry-After\` on 429.
+
+**Auth gating**: Anonymous sessions are accepted with a 30 req/h cap per IP. Authenticated sessions get 300 req/h keyed by JWT \`sub\`. Returns 500 with \`server_missing_api_key\` if the binding is absent.
+
+---
 
 ## geminiService.ts
 
@@ -930,6 +990,9 @@ interface ImageProcessOptions {
 - **Provider**: Google OAuth 2.0 via Cloudflare Pages Functions
 - **Requirement**: Email must be verified by Google
 - **Session**: JWT in HttpOnly Secure SameSite=Lax cookie (7-day expiry)
+- **CSRF**: 32-byte random \`state\` value in an HttpOnly cookie, verified on callback with constant-time compare
+- **PKCE (RFC 7636)**: 32-byte \`code_verifier\` derives a SHA-256 \`code_challenge\` sent to Google. The verifier stays server-side (Cloudflare KV with HttpOnly cookie fallback) and is consumed once on callback
+- **JWT claims**: \`iss=substrata-by-gantasmo\`, \`aud=substrata-web\`, \`iat\`, \`nbf\`, \`exp\`, with a 60-second leeway on time bounds
 
 ## Data Isolation
 All project data is scoped to the authenticated user via JWT claims. API middleware verifies the JWT and enforces ownership on every request.
@@ -951,11 +1014,20 @@ All project data is scoped to the authenticated user via JWT claims. API middlew
 - **Cookie Security**: HttpOnly (no JS access), Secure (HTTPS only), SameSite=Lax
 - **Ownership Enforcement**: Every mutation verifies \`user_id\` matches JWT \`sub\` claim
 - **SQL Injection Prevention**: All queries use parameterized bindings via D1 API
+- **Request Validation**: Zod schemas in \`functions/api/projects/schema.ts\` enforce shape on \`laserSettings\` and \`procOptions\`, reject unknown fields, and cap total payload size at 2 MiB
+- **Rate Limiting**: KV-backed sliding-window limiter. \`/api/auth/callback\` is capped at 20 req/min per IP. \`/api/ai/relay\` is capped at 30 req/h anonymous, 300 req/h per authenticated user. Falls open if the \`RATE_LIMIT\` KV binding is absent
 
 ## API Key Management
-- Gemini API key is injected at build time via Vite's \`define\` plugin
-- OAuth credentials stored as Cloudflare Pages secrets (never exposed to frontend)
-- JWT secret stored as Cloudflare Pages secret
+
+The Gemini API key (\`GEMINI_API_KEY\`) is a Cloudflare Pages environment binding read only by \`functions/api/ai/relay.ts\`. The browser bundle contains no key value. Every Gemini call in \`src/services/geminiService.ts\` and \`src/services/ttsService.ts\` POSTs to \`/api/ai/relay\` so the request is signed server-side and forwarded to Google.
+
+The relay returns only the fields the client consumes (\`text\`, \`candidates\`, \`functionCalls\`) and surfaces an upstream status code on failure for retry logic. Anonymous sessions are accepted with a tighter quota; authenticated sessions get a higher quota keyed by JWT \`sub\`.
+
+OAuth credentials (\`GOOGLE_CLIENT_ID\`, \`GOOGLE_CLIENT_SECRET\`) and \`JWT_SECRET\` are Cloudflare Pages secrets and are never exposed to the frontend.
+
+## KV Namespace
+
+PKCE verifier storage and rate-limit counters both use a single Cloudflare KV namespace bound as \`RATE_LIMIT\`. Create one with \`npx wrangler kv namespace create RATE_LIMIT\` and paste the returned id into the commented \`[[kv_namespaces]]\` block in \`wrangler.toml\`. While unbound, the rate limiter allows all traffic and PKCE stores the verifier in a short-lived HttpOnly cookie.
 `
   },
   {
@@ -998,15 +1070,26 @@ The app will be available at \`http://localhost:3000\`.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| \`VITE_GEMINI_API_KEY\` | Yes | Google Gemini API key for AI features |
+| \`VITE_SMITHSONIAN_API_KEY\` | No | Smithsonian Open Access API key for the Library scraper |
+
+> The Gemini key is no longer a frontend variable. Set \`GEMINI_API_KEY\` as a Cloudflare Pages secret (see below). Every AI call routes through \`functions/api/ai/relay.ts\` so the key stays server-side.
 
 ### Cloudflare Pages Secrets (set via dashboard or \`wrangler pages secret put\`)
 
 | Secret | Required | Description |
 |--------|----------|-------------|
+| \`GEMINI_API_KEY\` | Yes | Server-side Gemini key read by \`/api/ai/relay\` |
 | \`GOOGLE_CLIENT_ID\` | Yes | Google OAuth 2.0 Client ID |
 | \`GOOGLE_CLIENT_SECRET\` | Yes | Google OAuth 2.0 Client Secret |
-| \`JWT_SECRET\` | Yes | Random string for signing session JWTs |
+| \`JWT_SECRET\` | Yes | Random string for signing session JWTs (32+ bytes of entropy) |
+
+### KV Namespace (optional but recommended)
+
+\`\`\`bash
+npx wrangler kv namespace create RATE_LIMIT
+\`\`\`
+
+Paste the returned id into the commented \`[[kv_namespaces]]\` block in \`wrangler.toml\` and redeploy. The same binding holds PKCE verifiers and rate-limit counters.
 
 ## Build Commands
 
