@@ -1,31 +1,149 @@
-# BeamCraft Firebase Security Specification
+# SUBSTRATA Security Specification
 
-## 1. Data Invariants
-- **Identity Isolation**: All data is strictly sandboxed by `userId`. A user can only access paths under `/users/{auth.uid}/`.
-- **Integrity**: Fields like `userId` in document data must match the authenticated user's ID.
-- **Temporality**: `createdAt` is set once on creation to server time. `updatedAt` is refreshed on every update to server time.
-- **Shape Validation**: All documents must strictly match the schema defined in `firebase-blueprint.json`. Excess fields are rejected.
+This document describes the deployed security model of the Cloudflare Pages + D1
+build of SUBSTRATA (the live stack). It supersedes the prior Firebase/Firestore
+spec that lived here, which referenced a previous product and is no longer
+authoritative.
 
-## 2. The "Dirty Dozen" Payloads (Security TDD)
+## 1. Threat Model
 
-| # | Vector | Payload (JSON) | Target Path | Expected |
-|---|---|---|---|---|
-| 1 | Identity Spoofing | `{"userId": "attacker", "name": "Fake"}` | `/users/victim/projects/p1` | DENIED |
-| 2 | Omission Attack | `{"name": "No User ID"}` | `/users/user1/projects/p1` | DENIED |
-| 3 | Immutability Breach | `{"createdAt": "2000-01-01T00:00:00Z"}` | Update `/users/user1/projects/p1` | DENIED |
-| 4 | Cross-User Read | N/A (GET request) | `/users/victim/projects/p1` | DENIED |
-| 5 | Cross-User Delete | N/A (DELETE request) | `/users/victim/projects/p1` | DENIED |
-| 6 | Ghost Field Injection | `{"name": "P1", "userId": "u1", "isAdmin": true}` | `/users/u1/projects/p1` | DENIED |
-| 7 | Temporal Spoofing | `{"updatedAt": "2100-01-01T00:00:00Z"}` | Update `/users/u1/projects/p1` | DENIED |
-| 8 | Resource Poisoning | `{"name": "A".repeat(2000), ...}` | `/users/u1/projects/p1` | DENIED (size limit) |
-| 9 | Unauthenticated Write | `{"name": "Evil"}` | `/users/u1/projects/p1` | DENIED |
-| 10 | Profile Hijacking | `{"email": "evil@evil.com", "userId": "u1"}` | `/users/u1/profile` | DENIED (if auth.uid != u1) |
-| 11 | Malformed ID | N/A (Path injection) | `/users/u1/projects/invalid%%ID` | DENIED (regex guard) |
-| 12 | State Shortcutting | `{"isProcessed": true}` (if state existed) | `/users/u1/projects/p1` | DENIED |
+SUBSTRATA is a single-tenant-per-user web application. Every authenticated user
+owns a private set of projects. The trust boundary is:
 
-## 3. Implementation Checklist
-- [ ] Global deny catch-all.
-- [ ] `isValidId()` regex check on all document IDs.
-- [ ] `isValidProject()` schema validation.
-- [ ] `isOwner()` helper for path-based security.
-- [ ] Atomic relational checks (if ever needed).
+- **Trusted:** Cloudflare Pages Functions running in the worker isolate, D1
+  bindings, and Cloudflare-managed environment secrets.
+- **Untrusted:** The browser, all `fetch` bodies, all cookies presented by the
+  browser, all query strings, all OAuth callback parameters.
+
+The product does not currently have admin roles, multi-tenant projects, or
+billing. Those expansions will require additional rules.
+
+## 2. Data Invariants
+
+- **Identity isolation** — Every row in `projects` carries `user_id` matching
+  the authenticated `sub` claim. Reads and writes are scoped via `WHERE
+  user_id = ?` in every query. No row is visible to a user other than its
+  owner.
+- **Server-authoritative timestamps** — `created_at` and `updated_at` are set
+  server-side via `new Date().toISOString()` in every INSERT/UPDATE. Client
+  values for these columns are ignored.
+- **Server-authoritative ownership** — The `user_id` column is bound from the
+  JWT `sub` claim, never from request bodies. A client cannot escalate to or
+  spoof another user via field injection.
+- **Shape validation** — `id` and `name` are required on POST; both are
+  strings. Other fields (`originalImage`, `processedImage`,
+  `laser_settings`, `proc_options`) are stored as nullable text/JSON.
+- **Parameterised queries** — All D1 statements use `.bind()` placeholders;
+  no string concatenation, no template interpolation into SQL. SQL injection
+  is structurally unreachable on the current API surface.
+
+## 3. Authentication
+
+- **Provider:** Google OAuth 2.0 (Authorization Code, confidential client).
+- **Scopes requested:** `openid email profile` (no offline scopes beyond
+  `access_type=offline`).
+- **CSRF defence:** The login route mints a 32-byte random `state` value
+  using `crypto.getRandomValues`, sets it in an HttpOnly `SameSite=Lax`
+  cookie (`substrata_oauth_state`, 10-minute TTL), and forwards the same
+  value to Google. The callback verifies the returned `state` matches the
+  cookie via constant-time comparison and rejects any mismatch with
+  `?auth_error=state_mismatch`. The state cookie is cleared on both
+  success and failure paths.
+- **Email verification:** Tokens whose `userinfo` returns
+  `email_verified=false` are rejected with `?auth_error=email_not_verified`.
+- **User upsert:** Successful authentication upserts the user row keyed by
+  Google `sub` claim. Display name and photo URL are updated on every login.
+
+## 4. Sessions
+
+- **Carrier:** JWT signed with HMAC-SHA-256 over `header.payload`. Signing key
+  is the Cloudflare-managed secret `JWT_SECRET`; minimum 256-bit entropy is
+  required (operational requirement, not enforced in code).
+- **Lifetime:** 7 days. Every token carries `iss=substrata-by-gantasmo`,
+  `aud=substrata-web`, `iat`, `nbf`, `exp`. The verifier rejects on
+  signature mismatch, missing/incorrect `iss`/`aud`, or `exp`/`nbf`
+  outside a 60-second leeway window.
+- **Cookie:** `substrata_session`, attributes `HttpOnly; Secure;
+  SameSite=Lax; Path=/; Max-Age=604800`. Not readable by JavaScript and not
+  sent on cross-site `<form>` POSTs. Top-level navigations from Google
+  (`SameSite=Lax`) still carry the cookie — required for the OAuth bounce.
+- **Logout:** `/api/auth/logout` POST sets `substrata_session` with
+  `Max-Age=0`, evicting the cookie from the browser. No server-side
+  revocation list — by design, since the JWT is short-lived and bound to
+  the cookie.
+
+## 5. Authorisation
+
+- **API gate:** All `/api/projects/*` routes are protected by
+  `functions/api/projects/_middleware.ts`, which verifies the JWT, parses
+  `sub`, and rejects with HTTP 401 if invalid or expired.
+- **Per-record ownership:** Mutations (`POST /api/projects`,
+  `PUT/DELETE /api/projects/[id]`) re-check `existing.user_id === userId`
+  inside the handler and return HTTP 403 on mismatch, preventing IDOR via
+  guessed or stolen IDs.
+- **Listing:** `GET /api/projects` always filters by the JWT-derived
+  `user_id`; the user cannot list projects owned by anyone else.
+
+## 6. Cross-Site & Cross-Origin
+
+- **Cookies:** `SameSite=Lax` blocks most CSRF on state-changing requests.
+  No `Access-Control-Allow-Origin` header is set, so by default the API
+  refuses cross-origin requests with credentials.
+- **CSP:** Recommended Cloudflare `_headers` entry (not yet shipped):
+  ```
+  /*
+    Content-Security-Policy: default-src 'self'; script-src 'self' https://ajax.googleapis.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' https://generativelanguage.googleapis.com https://api.si.edu https://www.loc.gov; frame-ancestors 'none'
+  ```
+- **External script:** `index.html` loads `model-viewer` from
+  `ajax.googleapis.com`. CSP must permit this origin or self-host the
+  bundle.
+
+## 7. Secrets Management
+
+| Secret             | Where stored                                | How read                       |
+|--------------------|---------------------------------------------|--------------------------------|
+| `GOOGLE_CLIENT_ID` | Cloudflare Pages env binding                | `context.env.GOOGLE_CLIENT_ID` |
+| `GOOGLE_CLIENT_SECRET` | Cloudflare Pages env binding (secret)   | `context.env.GOOGLE_CLIENT_SECRET` |
+| `JWT_SECRET`       | Cloudflare Pages env binding (secret)       | `context.env.JWT_SECRET`       |
+| `VITE_GEMINI_API_KEY` | GitHub Actions secret → Vite `define`    | `import.meta.env`              |
+| `VITE_SMITHSONIAN_API_KEY` | GitHub Actions secret → Vite `define` | `import.meta.env`              |
+
+The two `VITE_*` keys are injected into the browser bundle at build time —
+treat them as **public**. Restrict them by Google/Smithsonian referer policy.
+The three Pages env bindings are never exposed to the browser.
+
+## 8. XSS
+
+- React 19 escapes by default. No `dangerouslySetInnerHTML` on
+  user-supplied content. The only `dangerouslySetInnerHTML` usage (community
+  search results) consumes AI output — see Known Gaps.
+
+## 9. Input Validation
+
+Server-side validation is currently minimal: `id` and `name` are required
+strings; everything else is JSON-serialised and stored opaquely. Future
+work should formalise the `laserSettings` / `procOptions` schemas
+(e.g. Zod) and enforce maximum payload sizes per row.
+
+## 10. Known Gaps (Tracked)
+
+| ID    | Gap                                                                | Severity | Status   |
+|-------|--------------------------------------------------------------------|----------|----------|
+| SEC-1 | No PKCE on the OAuth flow (confidential-client only)               | Medium   | Backlog  |
+| SEC-2 | No rate limiting on `/api/auth/callback` or `/api/projects/*`      | Medium   | Backlog  |
+| SEC-3 | JWT verifier does not check `iss`/`aud` claims                     | Low      | **Fixed** — `iss=substrata-by-gantasmo`, `aud=substrata-web`, `nbf`/`exp` with 60s leeway |
+| SEC-4 | No formal schema for `laserSettings` / `procOptions`               | Low      | Backlog  |
+| SEC-5 | CSP header not shipped in `public/_headers`                        | Medium   | Backlog  |
+| SEC-6 | AI-generated "community search" output rendered via dangerouslySetInnerHTML — sanitised: HTML-escape first, then re-allow `**bold**` and `\n` only | High | **Fixed** |
+| SEC-7 | `wrangler.toml` carries the production `database_id`               | Low      | Backlog  |
+
+## 11. Verified Properties (Manual Audit, 2026-05-26)
+
+- [x] All D1 queries use `.bind()` placeholders (`grep -nE "DB\\.prepare\\(['\"]" functions/`)
+- [x] No `dangerouslySetInnerHTML` on user-controlled input in the React tree
+- [x] Logout clears `substrata_session` cookie
+- [x] CSRF `state` is generated, set in HttpOnly cookie, and verified on
+      callback with constant-time compare
+- [x] Project mutations re-verify `user_id` ownership inside the handler
+- [x] Session cookie attributes: `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`,
+      `Max-Age=604800`

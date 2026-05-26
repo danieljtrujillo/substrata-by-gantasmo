@@ -1,6 +1,17 @@
 // GET /api/auth/callback — Google OAuth callback, exchanges code for tokens, sets session cookie
 import type { Env } from '../../types';
-import { signJWT, setSessionCookie } from '../../jwt';
+import {
+  signJWT, setSessionCookie,
+  getOAuthState, clearOAuthStateCookie,
+} from '../../jwt';
+
+/** Constant-time string compare so state validation does not leak timing info. */
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
 
 interface GoogleTokenResponse {
   access_token: string;
@@ -21,9 +32,29 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   const url = new URL(context.request.url);
   const code = url.searchParams.get('code');
   const error = url.searchParams.get('error');
+  const stateFromGoogle = url.searchParams.get('state');
 
   if (error || !code) {
-    return Response.redirect(`${url.origin}/?auth_error=${error || 'no_code'}`, 302);
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: `${url.origin}/?auth_error=${error || 'no_code'}`,
+        'Set-Cookie': clearOAuthStateCookie(),
+      },
+    });
+  }
+
+  // CSRF defence: the `state` returned by Google must match the value we set
+  // in the HttpOnly cookie when starting the flow. Constant-time compare.
+  const stateFromCookie = getOAuthState(context.request);
+  if (!stateFromCookie || !stateFromGoogle || !timingSafeEqual(stateFromCookie, stateFromGoogle)) {
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: `${url.origin}/?auth_error=state_mismatch`,
+        'Set-Cookie': clearOAuthStateCookie(),
+      },
+    });
   }
 
   // Exchange authorization code for tokens
@@ -83,11 +114,10 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     JWT_SECRET
   );
 
-  return new Response(null, {
-    status: 302,
-    headers: {
-      Location: `${url.origin}/`,
-      'Set-Cookie': setSessionCookie(jwt),
-    },
-  });
+  // Set the session cookie and clear the now-spent OAuth state cookie.
+  // Headers.append is the only way to emit two Set-Cookie values on one response.
+  const headers = new Headers({ Location: `${url.origin}/` });
+  headers.append('Set-Cookie', setSessionCookie(jwt));
+  headers.append('Set-Cookie', clearOAuthStateCookie());
+  return new Response(null, { status: 302, headers });
 };

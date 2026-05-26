@@ -119,6 +119,7 @@ import {
   generateLaserDesign, 
   consultLaserExpert, 
   analyzeLaserMaterial,
+  analyzeLaserMaterialStructured,
   getSmartSettings,
   transcribeSpokenPrompt,
   generateProjectBlueprint,
@@ -130,8 +131,10 @@ import {
   type SketchMode
 } from './services/geminiService';
 import { LibraryPanel as AssetLibraryPanel, HackerPanel, ArchitecturePanel } from './components/StudioModePanels';
+import type { BuildingDescriptor } from './lib/buildingCodeRules';
+import type { ElectricalPlan } from './lib/electricalPlan';
 import type { IndexedAsset } from './lib/scraper/ingest';
-import { speakText, cancelSpeech, generateAudioBuffer, playBuffer } from './services/ttsService';
+import { speakText, cancelSpeech, generateAudioBuffer, playBuffer, TTS_VOICES, DEFAULT_VOICE, type VoiceName } from './services/ttsService';
 import { ACMER_S1_PARAMETERS, ACMER_S1_MANUAL_SUMMARY, PROJECT_TEMPLATES, LaserSettings, LabelSettings, LABEL_SIZE_PRESETS, MUNBYN_ITPP130B, PRINTER_DATABASE, LASER_DATABASE } from './constants';
 import { STYLE_GUIDES } from './styleGuides';
 import { loginWithGoogle, logout, AUTH_AVAILABLE } from './lib/auth';
@@ -186,7 +189,7 @@ function Tip({ text, children, side = 'top' }: { text: string; children: React.R
     <span className="relative inline-flex" onMouseEnter={() => setShow(true)} onMouseLeave={() => setShow(false)}>
       {children}
       {show && (
-        <span className={`absolute z-[200] pointer-events-none ${posClass} px-2 py-1 rounded-md bg-black/90 border border-white/10 text-[9px] text-white/80 font-medium whitespace-nowrap shadow-xl backdrop-blur-sm max-w-[200px] text-center leading-tight`}>
+        <span className={`absolute z-200 pointer-events-none ${posClass} px-2 py-1 rounded-md bg-black/90 border border-white/10 text-[9px] text-white/80 font-medium whitespace-nowrap shadow-xl backdrop-blur-sm max-w-50 text-center leading-tight`}>
           {text}
         </span>
       )}
@@ -745,6 +748,8 @@ export default function App() {
   const [showAssetLibrary, setShowAssetLibrary] = useState(false);
   const [showHackerPanel, setShowHackerPanel] = useState(false);
   const [showArchPanel, setShowArchPanel] = useState(false);
+  const [architecturalBuilding, setArchitecturalBuilding] = useState<BuildingDescriptor | null>(null);
+  const [architecturalElectricalPlan, setArchitecturalElectricalPlan] = useState<ElectricalPlan | null>(null);
   const [importedAssets, setImportedAssets] = useState<IndexedAsset[]>([]);
   useEffect(() => {
     // Auto-close mode-gated panels when leaving their mode
@@ -823,6 +828,7 @@ export default function App() {
   const [labelText, setLabelText] = useState('');
   const [labelTextSize, setLabelTextSize] = useState(24);
   const [labelPrompt, setLabelPrompt] = useState('');
+  const labelPromptInputRef = useRef<HTMLInputElement>(null);
   const [isGeneratingLabel, setIsGeneratingLabel] = useState(false);
   const labelCanvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -1035,7 +1041,12 @@ export default function App() {
   };
 
   const handleGenerateLabelDesign = async () => {
-    if (!labelPrompt.trim()) return;
+    if (isGeneratingLabel) return;
+    if (!labelPrompt.trim()) {
+      toast.info("Enter a label description first");
+      labelPromptInputRef.current?.focus();
+      return;
+    }
     setIsGeneratingLabel(true);
     try {
       const result = await generateLaserDesign(
@@ -1764,6 +1775,10 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
 
   // Prototype generation — lifted from PrototypingStudio so it survives tab switches
   const handleGeneratePrototype = async (overridePrompt?: string) => {
+    if (isProtoGenerating) {
+      toast.info("Already generating — wait for this run to finish");
+      return;
+    }
     const activePrompt = overridePrompt || protoPrompt;
     if (!activePrompt.trim()) {
       toast.error("Please describe your prototype idea");
@@ -1774,10 +1789,14 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
     setProtoGenerationProgress(10);
     setGenerationStage(GENERATION_STAGES[0]);
 
+    // Hoisted so `finally` can always clear it — prior version only cleared on
+    // the happy path, leaking the interval whenever generation threw.
+    let progressInterval: ReturnType<typeof setInterval> | null = null;
+
     try {
       setProtoGenerationProgress(20);
       let stageIdx = 0;
-      const progressInterval = setInterval(() => {
+      progressInterval = setInterval(() => {
         setProtoGenerationProgress(p => Math.min(p + 5, 85));
         stageIdx = Math.min(stageIdx + 1, GENERATION_STAGES.length - 2);
         setGenerationStage(GENERATION_STAGES[stageIdx]);
@@ -1806,6 +1825,12 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
               url: '',
               fabrication: 'purchase',
             }));
+            // Capture the code-checkable descriptor + electrical plan so the
+            // Architecture panel can run checkBuilding() and buildPanelSchedule().
+            // Cast through unknown — the AI-emitted shapes match the lib types
+            // but Type.STRING enums don't carry the lib's narrowed unions.
+            setArchitecturalBuilding((arch.buildingDescriptor as unknown as BuildingDescriptor) ?? null);
+            setArchitecturalElectricalPlan((arch.electricalPlan as unknown as ElectricalPlan) ?? null);
             return {
               name: arch.name,
               description: arch.description,
@@ -1821,8 +1846,7 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
             };
           })()
         : await generateProjectBlueprint(enrichedPrompt, designStyle, selectedPrinter, '', referenceImage || undefined);
-      
-      clearInterval(progressInterval);
+
       setProtoGenerationProgress(90);
       setGenerationStage(GENERATION_STAGES[GENERATION_STAGES.length - 1]);
       
@@ -1857,6 +1881,7 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
       console.error(error);
       toast.error("Generation failed. Please try again.");
     } finally {
+      if (progressInterval) clearInterval(progressInterval);
       setTimeout(() => {
         setIsProtoGenerating(false);
         setProtoGenerationProgress(0);
@@ -1866,17 +1891,34 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
   };
 
   const handleAnalyzeMaterial = async () => {
+    if (isAnalyzing) return;
     if (!originalImage) return;
     setIsAnalyzing(true);
     try {
-        const result = await analyzeLaserMaterial(originalImage);
-        toast.info("Material Analysis Complete: " + result.slice(0, 100) + "...");
+      const result = await analyzeLaserMaterialStructured(originalImage);
+      // Auto-apply the recommendation to the active laser settings so the
+      // analysis is actually useful — the old version only logged a prose
+      // preview and dropped the numbers on the floor.
+      setLaserSettings(prev => ({
+        ...prev,
+        power:  result.power,
+        speed:  result.speed,
+        passes: result.passes,
+        mode:   result.mode,
+      }));
+      toast.success(
+        `Material: ${result.material} → ${result.power}% @ ${result.speed} mm/min, ${result.passes}× pass (${result.mode})` +
+        (result.needsMaskingTape ? ' · masking tape recommended' : ''),
+        { duration: 6000 },
+      );
+      if (result.notes) toast.info(result.notes, { duration: 8000 });
     } catch (e) {
-        toast.error("Analysis failed");
+      console.error(e);
+      toast.error('Analysis failed');
     } finally {
-        setIsAnalyzing(false);
+      setIsAnalyzing(false);
     }
-  }
+  };
 
   const handleExtrudeFromImage = async () => {
     const src = conceptSketchImage || referenceImage || originalImage;
@@ -1955,7 +1997,7 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
-            className="fixed inset-0 z-[100] p-4 md:p-12 flex items-center justify-center bg-black/80 backdrop-blur-xl"
+            className="fixed inset-0 z-100 p-4 md:p-12 flex items-center justify-center bg-black/80 backdrop-blur-xl"
           >
             <div className="w-full h-full max-w-5xl">
               <AdvancedEditor 
@@ -1977,7 +2019,7 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
         {showLibrary && (
           <motion.div 
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[80] bg-black/60 backdrop-blur-sm"
+            className="fixed inset-0 z-80 bg-black/60 backdrop-blur-sm"
             onClick={() => setShowLibrary(false)}
           >
             <motion.div 
@@ -2097,7 +2139,7 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
       <AnimatePresence>
         {showArViewer && arGlbUrl && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[90] bg-black/80 backdrop-blur-md flex items-center justify-center p-4"
+            className="fixed inset-0 z-90 bg-black/80 backdrop-blur-md flex items-center justify-center p-4"
             onClick={() => setShowArViewer(false)}>
             <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }}
               className="relative w-full max-w-2xl aspect-square bg-black/60 rounded-2xl border border-white/10 overflow-hidden"
@@ -2153,7 +2195,7 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
       <AnimatePresence>
         {showRegistry && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[80] bg-black/60 backdrop-blur-sm" onClick={() => setShowRegistry(false)}>
+            className="fixed inset-0 z-80 bg-black/60 backdrop-blur-sm" onClick={() => setShowRegistry(false)}>
             <motion.div initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
               transition={{ type: 'spring', damping: 25, stiffness: 200 }}
               className="absolute right-0 top-0 bottom-0 w-full max-w-lg glass-panel !rounded-none border-l border-white/10 overflow-auto"
@@ -2260,7 +2302,7 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
       <AnimatePresence>
         {showMaintenance && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[80] bg-black/60 backdrop-blur-sm" onClick={() => setShowMaintenance(false)}>
+            className="fixed inset-0 z-80 bg-black/60 backdrop-blur-sm" onClick={() => setShowMaintenance(false)}>
             <motion.div initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
               transition={{ type: 'spring', damping: 25, stiffness: 200 }}
               className="absolute right-0 top-0 bottom-0 w-full max-w-lg glass-panel !rounded-none border-l border-white/10 overflow-auto"
@@ -2279,7 +2321,7 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
       <AnimatePresence>
         {showDocs && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[80] bg-black/60 backdrop-blur-sm" onClick={() => setShowDocs(false)}>
+            className="fixed inset-0 z-80 bg-black/60 backdrop-blur-sm" onClick={() => setShowDocs(false)}>
             <motion.div initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
               transition={{ type: 'spring', damping: 25, stiffness: 200 }}
               className="absolute right-0 top-0 bottom-0 w-full max-w-2xl glass-panel !rounded-none border-l border-white/10 overflow-auto"
@@ -2296,7 +2338,7 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
         {/* ── Concept Sketch Panel ── */}
         {showConceptPanel && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[80] bg-black/60 backdrop-blur-sm" onClick={() => setShowConceptPanel(false)}>
+            className="fixed inset-0 z-80 bg-black/60 backdrop-blur-sm" onClick={() => setShowConceptPanel(false)}>
             <motion.div initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
               transition={{ type: 'spring', damping: 25, stiffness: 200 }}
               className="absolute right-0 top-0 bottom-0 w-full max-w-xl glass-panel !rounded-none border-l border-white/10 overflow-auto"
@@ -2371,15 +2413,31 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
 
                 {/* Community Search */}
                 <div className="border-t border-white/10 pt-4">
-                  <label className="text-[9px] font-black uppercase tracking-widest text-white/50 mb-2 block">Community Models</label>
+                  <label className="text-[9px] font-black uppercase tracking-widest text-white/50 mb-2 block">AI-Suggested Community Models</label>
                   <Button onClick={handleSearchCommunity} disabled={isSearchingCommunity}
                     className="w-full bg-white/10 hover:bg-white/20 text-white h-9 text-[10px] font-bold uppercase">
                     {isSearchingCommunity ? <RefreshCw className="w-3 h-3 mr-1.5 animate-spin" /> : <Search className="w-3 h-3 mr-1.5" />}
-                    Search Community Projects
+                    Suggest Community Projects
                   </Button>
                   {communityResults && (
-                    <div className="mt-3 p-3 rounded-lg bg-white/5 border border-white/10 text-[11px] text-white/70 leading-relaxed max-h-[300px] overflow-auto prose prose-invert prose-sm"
-                      dangerouslySetInnerHTML={{ __html: communityResults.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br/>') }} />
+                    <>
+                      <p className="mt-2 text-[9px] text-yellow-400/70 leading-snug">
+                        ⚠ AI-generated suggestions, not a live search. URLs may be invented — verify before opening.
+                      </p>
+                      <div className="mt-2 p-3 rounded-lg bg-white/5 border border-white/10 text-[11px] text-white/70 leading-relaxed max-h-75 overflow-auto prose prose-invert prose-sm"
+                        // Sanitise: HTML-escape the AI text first, THEN re-allow our two markdown affordances.
+                        // Direct `dangerouslySetInnerHTML` on raw model output is an XSS vector.
+                        dangerouslySetInnerHTML={{
+                          __html: communityResults
+                            .replace(/&/g, '&amp;')
+                            .replace(/</g, '&lt;')
+                            .replace(/>/g, '&gt;')
+                            .replace(/"/g, '&quot;')
+                            .replace(/'/g, '&#39;')
+                            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                            .replace(/\n/g, '<br/>')
+                        }} />
+                    </>
                   )}
                 </div>
               </div>
@@ -2390,7 +2448,7 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
 
       {/* ═══════ STUDIO MODE PANELS (mode-gated overlays) ═══════ */}
       {(showAssetLibrary || showHackerPanel || showArchPanel) && (
-        <div className="fixed inset-0 pointer-events-none z-[70]">
+        <div className="fixed inset-0 pointer-events-none z-70">
           <div className="relative w-full h-full pointer-events-auto">
             {showAssetLibrary && (
               <AssetLibraryPanel
@@ -2410,6 +2468,8 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
             {showArchPanel && studioMode === 'architecture' && (
               <ArchitecturePanel
                 onClose={() => setShowArchPanel(false)}
+                building={architecturalBuilding ?? undefined}
+                electricalPlan={architecturalElectricalPlan ?? undefined}
               />
             )}
           </div>
@@ -2513,7 +2573,7 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
               <Menu className="w-4 h-4" />
             </Button>
             {mobileMenuOpen && (
-              <div className="absolute right-0 top-8 w-44 glass-panel border border-white/10 rounded-lg py-1 z-[100] shadow-2xl">
+              <div className="absolute right-0 top-8 w-44 glass-panel border border-white/10 rounded-lg py-1 z-100 shadow-2xl">
                 {[
                   { label: 'Library', icon: Library, action: () => setShowLibrary(true) },
                   { label: 'Registry', icon: Database, action: () => setShowRegistry(true) },
@@ -2559,7 +2619,7 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
       <div className="flex-1 flex overflow-hidden">
 
         {/* ─── LEFT: Advisor Panel ─── */}
-        <div className={`shrink-0 border-r border-white/10 bg-black/20 flex flex-col transition-all duration-300 ${advisorCollapsed ? 'w-0 overflow-hidden' : 'w-[300px]'}`}>
+        <div className={`shrink-0 border-r border-white/10 bg-black/20 flex flex-col transition-all duration-300 ${advisorCollapsed ? 'w-0 overflow-hidden' : 'w-75'}`}>
           <ConsultantInterface
             isMuted={isAdvisorMuted}
             onToggleMute={() => setIsAdvisorMuted(!isAdvisorMuted)}
@@ -2881,8 +2941,8 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
                         <input type="file" className="absolute inset-0 opacity-0 cursor-pointer" onChange={handleLabelImageUpload} accept="image/*" />
                         <Upload className="w-3 h-3 mr-1" /> Upload
                       </Button>
-                      <Button onClick={() => {}} className="bg-orange-500 hover:bg-orange-600 text-white gap-1 text-xs h-8">
-                        <Sparkles className="w-3 h-3" /> AI Generate
+                      <Button onClick={handleGenerateLabelDesign} disabled={isGeneratingLabel} className="bg-orange-500 hover:bg-orange-600 text-white gap-1 text-xs h-8">
+                        {isGeneratingLabel ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />} AI Generate
                       </Button>
                     </div>
                   </div>
@@ -2892,7 +2952,7 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
               <div className="p-3 border-t border-white/10 bg-black/30">
                 <div className="flex gap-2">
                   <div className="relative flex-1">
-                    <Input placeholder="e.g. QR code label for my hexapod robot..." className="glass-input h-10 pr-12 text-sm border-white/10"
+                    <Input ref={labelPromptInputRef} placeholder="e.g. QR code label for my hexapod robot..." className="glass-input h-10 pr-12 text-sm border-white/10"
                       value={labelPrompt} onChange={e => setLabelPrompt(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleGenerateLabelDesign()} />
                     <div className="absolute right-1 top-1">
                       <Button size="icon" className="h-8 w-8 bg-orange-500 hover:bg-orange-600" onClick={handleGenerateLabelDesign} disabled={isGeneratingLabel || !labelPrompt}>
@@ -3286,7 +3346,7 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
         </button>
 
         {/* ─── RIGHT: Properties Panel ─── */}
-        <div className={`shrink-0 border-l border-white/10 bg-black/20 overflow-y-auto transition-all duration-300 ${propsCollapsed ? 'w-0 overflow-hidden' : 'w-[260px]'}`}>
+        <div className={`shrink-0 border-l border-white/10 bg-black/20 overflow-y-auto transition-all duration-300 ${propsCollapsed ? 'w-0 overflow-hidden' : 'w-65'}`}>
           <ScrollArea className="h-full">
             <div className="p-3 space-y-4">
               {engineeringMode === 'laser' ? (
@@ -3297,7 +3357,7 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
                     <div className="p-2 glass-panel border-white/10 space-y-2.5">
                       <div className="space-y-1">
                         <Label className="text-[9px] font-bold uppercase tracking-widest text-white/40">Smart Presets</Label>
-                        <Select onValueChange={applySmartSettings}>
+                        <Select onValueChange={(v) => { if (typeof v === 'string') applySmartSettings(v); }}>
                           <SelectTrigger className="glass-input border-white/10 bg-black/20 h-8 text-[10px]"><SelectValue placeholder="Select Material" /></SelectTrigger>
                           <SelectContent className="glass-panel border-white/20">
                             {Object.keys(materialPresets).map(mat => <SelectItem key={mat} value={mat} className="text-xs text-white hover:bg-white/10">{mat}</SelectItem>)}
@@ -3385,7 +3445,8 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
                     <div className="p-2 glass-panel border-white/10 space-y-2.5">
                       <div className="space-y-1">
                         <Label className="text-[9px] font-bold uppercase tracking-widest text-white/40">Preset Size</Label>
-                        <Select onValueChange={(key: string) => {
+                        <Select onValueChange={(key) => {
+                          if (typeof key !== 'string') return;
                           const preset = LABEL_SIZE_PRESETS[key as keyof typeof LABEL_SIZE_PRESETS];
                           if (preset) setLabelSettings(s => ({ ...s, labelWidth: preset.width, labelHeight: preset.height }));
                         }}>
@@ -3579,6 +3640,14 @@ function ConsultantInterface({
   const [useDeepThinking, setUseDeepThinking] = useState(false);
   const [pendingImage, setPendingImage] = useState<string | null>(null);
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
+  const [ttsVoice, setTtsVoice] = useState<VoiceName>(() => {
+    if (typeof window === 'undefined') return DEFAULT_VOICE;
+    const saved = localStorage.getItem('substrata.ttsVoice') as VoiceName | null;
+    return saved && TTS_VOICES.some(v => v.name === saved) ? saved : DEFAULT_VOICE;
+  });
+  useEffect(() => {
+    if (typeof window !== 'undefined') localStorage.setItem('substrata.ttsVoice', ttsVoice);
+  }, [ttsVoice]);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -3660,8 +3729,17 @@ function ConsultantInterface({
       mr.start();
       mediaRecorderRef.current = mr;
       setIsRecordingVoice(true);
-    } catch {
-      toast.error('Microphone access denied');
+    } catch (err: any) {
+      // Always recover the UI — never leave the button stuck in "recording".
+      setIsRecordingVoice(false);
+      mediaRecorderRef.current = null;
+      if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') {
+        toast.error('Microphone access denied — enable it in your browser settings');
+      } else if (err?.name === 'NotFoundError' || err?.name === 'OverconstrainedError') {
+        toast.error('No microphone detected');
+      } else {
+        toast.error(`Voice recording failed: ${err?.message ?? 'unknown error'}`);
+      }
     }
   };
 
@@ -3690,7 +3768,7 @@ function ConsultantInterface({
     let buf = msg.audioBuffer;
     if (!buf) {
       try {
-        buf = await generateAudioBuffer(msg.content);
+        buf = await generateAudioBuffer(msg.content, ttsVoice);
         setMessages(prev => prev.map((m, i) => i === msgIdx ? { ...m, audioBuffer: buf } : m));
       } catch {
         toast.error('TTS generation failed');
@@ -3905,7 +3983,7 @@ function ConsultantInterface({
             <textarea
               ref={textareaRef}
               placeholder="Describe your project idea..."
-              className="flex-1 min-h-[32px] max-h-[100px] resize-none rounded-lg bg-white/5 border border-white/10 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/30 focus:outline-none focus:border-laser-accent/50 shadow-inner overflow-y-auto"
+              className="flex-1 min-h-8 max-h-25 resize-none rounded-lg bg-white/5 border border-white/10 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/30 focus:outline-none focus:border-laser-accent/50 shadow-inner overflow-y-auto"
               value={input}
               onChange={(e) => { setInput(e.target.value); autoResize(); }}
               onKeyDown={(e) => {
@@ -3925,9 +4003,20 @@ function ConsultantInterface({
             </div>
             <span className={`text-[8px] font-bold uppercase tracking-widest ${useDeepThinking ? 'text-laser-accent' : 'text-white/30'}`}>Deep</span>
           </div>
+          {/* Voice picker — all 30 prebuilt Gemini voices */}
+          <select
+            value={ttsVoice}
+            onChange={e => setTtsVoice(e.target.value as VoiceName)}
+            title="Voice used for advisor message playback"
+            className="h-5 text-[8px] font-bold uppercase tracking-widest bg-white/5 text-white/60 hover:text-white border border-white/10 rounded px-1 focus:outline-none focus:border-laser-accent/40"
+          >
+            {TTS_VOICES.map(v => (
+              <option key={v.name} value={v.name}>{v.name} · {v.character}</option>
+            ))}
+          </select>
           <div className="flex-1" />
-          <Button 
-            variant="ghost" 
+          <Button
+            variant="ghost"
             size="sm"
             className="h-6 text-[9px] uppercase tracking-widest font-bold text-blue-400/60 hover:text-blue-300 hover:bg-blue-600/10 px-2"
             onClick={handleManualBuild}

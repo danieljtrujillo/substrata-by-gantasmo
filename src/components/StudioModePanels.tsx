@@ -72,7 +72,7 @@ export const LibraryPanel: React.FC<{
   }, [onUseAsBase]);
 
   return (
-    <div className="absolute top-4 left-4 w-[420px] max-h-[80%] overflow-hidden flex flex-col bg-black/95 backdrop-blur-md border border-white/10 rounded-xl z-20">
+    <div className="absolute top-4 left-4 w-105 max-h-[80%] overflow-hidden flex flex-col bg-black/95 backdrop-blur-md border border-white/10 rounded-xl z-20">
       <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-white/10">
         <div className="flex items-center gap-2">
           <Search className="w-4 h-4 text-amber-400" />
@@ -193,9 +193,23 @@ export const HackerPanel: React.FC<{
 
   const exportKicad = useCallback(() => {
     if (!result) return;
+    // Guard against empty schematics — a no-component .kicad_sch opens but
+    // wastes a user's time.
+    const componentCount = result.schematic.sheets[0]?.components.length ?? 0;
+    if (componentCount === 0) {
+      toast.error('Schematic has no components — generate a circuit first');
+      return;
+    }
+    if (result.hasErrors) {
+      toast.warning('Exporting a schematic with ERC errors — review findings before fabrication');
+    }
     const { files } = emitProjectFiles(result.schematic);
-    // Bundle as a single text dump the user can split, or download each file.
-    // Browser-only: trigger a download per file using anchor + Blob.
+    if (Object.keys(files).length === 0) {
+      toast.error('KiCad emitter produced no files');
+      return;
+    }
+    // Browser-only: trigger a download per file using anchor + Blob. Stagger
+    // the clicks slightly so browsers that batch downloads still fire each.
     for (const [name, content] of Object.entries(files)) {
       const blob = new Blob([content], { type: 'text/plain' });
       const a = document.createElement('a');
@@ -204,13 +218,16 @@ export const HackerPanel: React.FC<{
       a.click();
       URL.revokeObjectURL(a.href);
     }
-    toast.success(`Exported ${Object.keys(files).length} KiCad files`);
+    toast.success(
+      `Exported ${Object.keys(files).length} KiCad files (${componentCount} parts)`,
+      { description: 'Pin positions are approximated — re-route wires in KiCad after import.', duration: 7000 },
+    );
   }, [result]);
 
   const bom = useMemo(() => result ? buildBom(result.schematic) : [], [result]);
 
   return (
-    <div className="absolute top-4 left-4 w-[440px] max-h-[80%] overflow-hidden flex flex-col bg-black/95 backdrop-blur-md border border-amber-500/20 rounded-xl z-20">
+    <div className="absolute top-4 left-4 w-110 max-h-[80%] overflow-hidden flex flex-col bg-black/95 backdrop-blur-md border border-amber-500/20 rounded-xl z-20">
       <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-white/10">
         <div className="flex items-center gap-2">
           <Cpu className="w-4 h-4 text-amber-400" />
@@ -294,7 +311,7 @@ export const HackerPanel: React.FC<{
                     <div key={i} className="flex justify-between gap-2 text-white/70 py-0.5 border-b border-white/5 last:border-0">
                       <span className="text-amber-300">×{b.qty}</span>
                       <span className="flex-1 truncate">{b.value}</span>
-                      <span className="text-white/30 truncate max-w-[160px]">{b.libId}</span>
+                      <span className="text-white/30 truncate max-w-40">{b.libId}</span>
                     </div>
                   ))}
                 </div>
@@ -340,7 +357,7 @@ export const ArchitecturePanel: React.FC<{
   }, [electricalPlan, onElectricalSvgChange]);
 
   return (
-    <div className="absolute top-4 left-4 w-[440px] max-h-[80%] overflow-hidden flex flex-col bg-black/95 backdrop-blur-md border border-emerald-500/20 rounded-xl z-20">
+    <div className="absolute top-4 left-4 w-110 max-h-[80%] overflow-hidden flex flex-col bg-black/95 backdrop-blur-md border border-emerald-500/20 rounded-xl z-20">
       <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-white/10">
         <div className="flex items-center gap-2">
           <Building2 className="w-4 h-4 text-emerald-400" />

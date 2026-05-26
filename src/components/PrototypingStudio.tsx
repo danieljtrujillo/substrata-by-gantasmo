@@ -656,7 +656,7 @@ export const PrototypingStudio = ({ designStyle = 'minimalist', advisorContext =
                           {validationReport.overallScore === 'pass' && <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
                           {validationReport.overallScore === 'warn' && <AlertTriangle className="w-4 h-4 text-yellow-400" />}
                           {validationReport.overallScore === 'fail' && <XCircle className="w-4 h-4 text-red-400" />}
-                          <span className="text-xs font-bold text-white truncate max-w-[160px]">{importedModelName}</span>
+                          <span className="text-xs font-bold text-white truncate max-w-40">{importedModelName}</span>
                         </div>
                         <button className="text-white/30 hover:text-white transition-colors" onClick={() => setShowValidation(false)}>✕</button>
                       </div>

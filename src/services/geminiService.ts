@@ -6,11 +6,31 @@ import { getRegistrySummary, getDfmSummary } from '../engineeringRegistry';
 
 const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
 
+// Centralised model registry — single source of truth so model upgrades are
+// a one-line change. See https://ai.google.dev/gemini-api/docs/models
+export const MODELS = {
+  pro:        'gemini-3.1-pro-preview',          // deep reasoning, blueprint gen, analysis
+  flash:      'gemini-3.5-flash',                // stable chat / quick analysis / transcription
+  flashImage: 'gemini-3.1-flash-image-preview',  // Nano Banana 2 — design synthesis
+  proImage:   'gemini-3-pro-image-preview',      // Nano Banana Pro — high-quality renders
+} as const;
+
 function getResponseText(response: { text?: string }): string {
   if (!response.text) {
     throw new Error("Gemini response did not include any text content.");
   }
   return response.text;
+}
+
+/**
+ * Strip a data-URL prefix and return just the base64 payload. Tolerates both
+ * `data:image/png;base64,XXX` and bare `XXX` inputs. Single source of truth —
+ * every Gemini inline-data callsite uses this so a missing prefix can't make
+ * `undefined` land in the API payload.
+ */
+function dataUrlToB64(input: string): string {
+  const idx = input.indexOf(',');
+  return idx === -1 ? input : input.slice(idx + 1);
 }
 
 async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
@@ -83,7 +103,7 @@ export async function generateLaserDesign(prompt: string, style: string = "minim
   const styleDirective = getStyleDirective(style as DesignStyle);
   const parts: any[] = [];
   if (referenceImage) {
-    parts.push({ inlineData: { data: referenceImage.split(',')[1], mimeType: 'image/png' } });
+    parts.push({ inlineData: { data: dataUrlToB64(referenceImage), mimeType: 'image/png' } });
     parts.push({ text: 'Use the provided reference image as inspiration for the design. Match its proportions and overall form, but adapt it to laser engraving style.\n\n' });
   }
   parts.push({ text: `Generate a high-contrast, black and white stencil suitable for laser engraving of: ${prompt}.
@@ -93,7 +113,7 @@ ${styleDirective}
 The output must be clearly reproducible on wood or metal via laser engraving. Produce a single centered design with no text labels unless the user asked for text.` });
 
   const response = await ai.models.generateContent({
-    model: "gemini-3.1-flash-image-preview",
+    model: MODELS.flashImage,
     contents: { parts },
     config: {
       imageConfig: {
@@ -113,23 +133,88 @@ The output must be clearly reproducible on wood or metal via laser engraving. Pr
 
 export async function analyzeLaserMaterial(imageBase64: string) {
   const response = await ai.models.generateContent({
-    model: "gemini-3.1-pro-preview",
+    model: MODELS.pro,
     contents: {
       parts: [
-        { inlineData: { data: imageBase64.split(',')[1], mimeType: "image/png" } },
+        { inlineData: { data: dataUrlToB64(imageBase64), mimeType: "image/png" } },
         { text: "Identify the material in this image. Assess its suitability for prototyping — including 3D printing, laser engraving, and CNC. For laser engraving, suggest optimal power (0-100%) and speed (mm/min) settings for an ACMER S1 2.5W diode laser and whether it needs masking tape. Also suggest other fabrication methods that could work with this material." }
       ]
     }
   });
-  return response.text;
+  return getResponseText(response);
+}
+
+/**
+ * Material analysis that returns *structured* laser parameters alongside the
+ * prose summary. Used to auto-apply recommendations to the laser settings
+ * panel — the prose-only `analyzeLaserMaterial` is kept for the advisor.
+ */
+export interface MaterialAnalysisResult {
+  material: string;
+  power: number;       // 0-100
+  speed: number;       // mm/min
+  passes: number;      // ≥ 1
+  mode: 'M3' | 'M4';   // ACMER GRBL mode
+  needsMaskingTape: boolean;
+  notes: string;
+}
+
+export async function analyzeLaserMaterialStructured(
+  imageBase64: string,
+): Promise<MaterialAnalysisResult> {
+  const response = await ai.models.generateContent({
+    model: MODELS.pro,
+    contents: {
+      parts: [
+        { inlineData: { data: dataUrlToB64(imageBase64), mimeType: 'image/png' } },
+        { text: `Identify the material in this image and recommend ACMER S1 2.5W diode laser settings.
+Constraints:
+- power: integer 0-100 (percent)
+- speed: integer mm/min, typical range 500-4000
+- passes: integer ≥ 1
+- mode: "M4" for engraving/marking (variable power), "M3" for cutting (constant power)
+- material: short human-readable name ("plywood", "leather", "anodized aluminium", …)
+- needsMaskingTape: true for shiny/reflective surfaces or fine detail on light wood
+- notes: 1-2 sentences explaining the recommendation
+Return JSON.` },
+      ],
+    },
+    config: {
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          material:         { type: Type.STRING },
+          power:            { type: Type.NUMBER },
+          speed:            { type: Type.NUMBER },
+          passes:           { type: Type.NUMBER },
+          mode:             { type: Type.STRING },
+          needsMaskingTape: { type: Type.BOOLEAN },
+          notes:            { type: Type.STRING },
+        },
+        required: ['material', 'power', 'speed', 'passes', 'mode', 'needsMaskingTape', 'notes'],
+      },
+    },
+  });
+  const raw = JSON.parse(getResponseText(response));
+  // Clamp + coerce — protect downstream UI from out-of-range AI values.
+  return {
+    material:         String(raw.material ?? 'unknown'),
+    power:            Math.max(0, Math.min(100, Math.round(Number(raw.power) || 0))),
+    speed:            Math.max(100, Math.min(10000, Math.round(Number(raw.speed) || 1500))),
+    passes:           Math.max(1, Math.min(20, Math.round(Number(raw.passes) || 1))),
+    mode:             raw.mode === 'M3' ? 'M3' : 'M4',
+    needsMaskingTape: !!raw.needsMaskingTape,
+    notes:            String(raw.notes ?? ''),
+  };
 }
 
 export async function getSmartSettings(material: string, manualContent: string) {
   const response = await ai.models.generateContent({
-    model: "gemini-3.1-pro-preview",
+    model: MODELS.pro,
     contents: `Based on the following laser manual content: \n\n${manualContent}\n\n What are the recommended settings for ${material}? Provide power, speed, and passes.`
   });
-  return response.text;
+  return getResponseText(response);
 }
 
 const ADVISOR_SYSTEM_INSTRUCTION = `You are a world-class rapid prototyping expert and engineering advisor for SUBSTRATA by GANTASMO.
@@ -186,8 +271,7 @@ export async function consultLaserExpert(query: string, history: any[] = [], use
   // Build user parts with optional image
   const userParts: any[] = [];
   if (imageBase64) {
-    const raw = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
-    userParts.push({ inlineData: { data: raw, mimeType: 'image/png' } });
+    userParts.push({ inlineData: { data: dataUrlToB64(imageBase64), mimeType: 'image/png' } });
     userParts.push({ text: 'The user attached this image. Analyze it in context of their message:\n\n' });
   }
   userParts.push({ text: query });
@@ -209,26 +293,29 @@ export async function consultLaserExpert(query: string, history: any[] = [], use
     }
   }));
 
+  // Advisor calls may legitimately return only tool-calls with no text — keep
+  // empty-string coercion here, but only when the model actually invoked tools.
+  const calls = response.functionCalls || [];
   return {
-    text: response.text || "",
-    calls: response.functionCalls || []
+    text: calls.length > 0 ? (response.text ?? '') : getResponseText(response),
+    calls,
   };
 }
 
 export async function complexThinkingTask(query: string) {
   const response = await ai.models.generateContent({
-    model: "gemini-3.1-pro-preview",
+    model: MODELS.pro,
     contents: query,
     config: {
       thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH }
     }
   });
-  return response.text;
+  return getResponseText(response);
 }
 
 export async function searchCommunityModels(query: string): Promise<string> {
   const response = await withRetry(() => ai.models.generateContent({
-    model: "gemini-3-flash-preview",
+    model: MODELS.flash,
     contents: `Search for 3D models, laser cut files, and maker community projects related to: "${query}"
 
 Find specific results from these platforms: Thingiverse, Printables, GrabCAD, GitHub, Instructables, Hackaday, MyMiniFactory, Cults3D.
@@ -245,7 +332,7 @@ Return the top 5-8 most relevant results. Format as a clean markdown list.`,
       toolConfig: { includeServerSideToolInvocations: true }
     }
   }));
-  return response.text || 'No results found.';
+  return getResponseText(response);
 }
 
 export async function synthesizeImageEdition(
@@ -267,10 +354,10 @@ export async function synthesizeImageEdition(
 
     const parts: any[] = [];
     if (imageBase64) {
-        parts.push({ inlineData: { data: imageBase64.split(',')[1], mimeType: "image/png" } });
+        parts.push({ inlineData: { data: dataUrlToB64(imageBase64), mimeType: "image/png" } });
     }
     if (maskBase64) {
-        parts.push({ inlineData: { data: maskBase64.split(',')[1], mimeType: "image/png" } });
+        parts.push({ inlineData: { data: dataUrlToB64(maskBase64), mimeType: "image/png" } });
     }
     parts.push({ text: `${mode.toUpperCase()}: ${prompt}` });
 
@@ -296,7 +383,7 @@ export async function synthesizeImageEdition(
 
 export async function transcribeSpokenPrompt(audioBase64: string) {
     const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: MODELS.flash,
         contents: {
             parts: [
                 { inlineData: { data: audioBase64, mimeType: "audio/wav" } },
@@ -304,7 +391,7 @@ export async function transcribeSpokenPrompt(audioBase64: string) {
             ]
         }
     });
-    return response.text;
+    return getResponseText(response);
 }
 
 // ── Enhanced Blueprint Generation ─────────────────────────────
@@ -447,13 +534,13 @@ Return exactly as JSON.`;
 
   const contentParts: any[] = [];
   if (referenceImage) {
-    contentParts.push({ inlineData: { data: referenceImage.split(',')[1], mimeType: 'image/png' } });
+    contentParts.push({ inlineData: { data: dataUrlToB64(referenceImage), mimeType: 'image/png' } });
     contentParts.push({ text: 'REFERENCE IMAGE: Use this as a visual guide for proportions, form factor, and overall shape. The design should closely match the reference.\n\n' });
   }
   contentParts.push({ text: textContent });
 
   const response = await withRetry(() => ai.models.generateContent({
-    model: "gemini-3.1-pro-preview",
+    model: MODELS.pro,
     contents: { parts: contentParts },
     config: {
       responseMimeType: "application/json",
@@ -529,7 +616,7 @@ export async function generateParametricVariant(
   designStyle: string
 ): Promise<{ code: string; description: string; parameters: Record<string, number> }> {
   const response = await withRetry(() => ai.models.generateContent({
-    model: "gemini-3.1-pro-preview",
+    model: MODELS.pro,
     contents: `You are an OpenSCAD expert. Given existing OpenSCAD code, generate a parametric variant.
 
 EXISTING CODE:
@@ -631,7 +718,7 @@ Soft rules:
   ].filter(Boolean).join('\n');
 
   const response = await withRetry(() => ai.models.generateContent({
-    model: 'gemini-3.1-pro-preview',
+    model: MODELS.pro,
     contents: `${systemPrompt}\n\nREQUEST: ${prompt}\n${contextLines}\n\nProject name: "${projectName}"`,
     config: {
       responseMimeType: 'application/json',
@@ -716,7 +803,7 @@ Soft rules:
     },
   }));
 
-  const parsed = JSON.parse(response.text ?? '{}');
+  const parsed = JSON.parse(getResponseText(response));
   // Coerce rotation to one of the legal values; LLM occasionally returns floats.
   for (const sheet of parsed.sheets ?? []) {
     for (const c of sheet.components ?? []) {
@@ -780,13 +867,13 @@ export async function generateConceptSketch(
 
   const parts: any[] = [];
   if (referenceImage) {
-    parts.push({ inlineData: { data: referenceImage.split(',')[1], mimeType: 'image/png' } });
+    parts.push({ inlineData: { data: dataUrlToB64(referenceImage), mimeType: 'image/png' } });
     parts.push({ text: `Use the provided reference image as a visual guide for proportions and form. Reinterpret it in the sketch style described below.\n\n` });
   }
   parts.push({ text: `SUBJECT: ${prompt}\n\n${modePrompt}\n\n${sketchStyleDirective}\n\nProduce one high-quality concept sketch image. No photo-realism — this must look hand-drawn/sketched.` });
 
   const response = await withRetry(() => ai.models.generateContent({
-    model: 'gemini-3.1-flash-image-preview',
+    model: MODELS.flashImage,
     contents: { parts },
     config: {
       imageConfig: {
@@ -852,7 +939,7 @@ ${directive}` },
   }
 
   const response = await withRetry(() => ai.models.generateContent({
-    model: 'gemini-3.1-flash-preview',
+    model: MODELS.flash,
     contents: { parts },
     config: {
       responseMimeType: 'application/json',
@@ -869,7 +956,7 @@ ${directive}` },
     },
   }));
 
-  const parsed = JSON.parse(response.text ?? '{}');
+  const parsed = JSON.parse(getResponseText(response));
   const styleScore = Math.max(0, Math.min(1, Number(parsed.styleScore) || 0));
   return {
     styleScore,
@@ -937,7 +1024,7 @@ export async function validateModelVsDescription(
     : '';
 
   const response = await withRetry(() => ai.models.generateContent({
-    model: 'gemini-3.1-flash-preview',
+    model: MODELS.flash,
     contents: {
       parts: [
         { inlineData: { data: renderedImageBase64.replace(/^data:image\/\w+;base64,/, ''), mimeType: 'image/png' } },
@@ -1006,6 +1093,19 @@ export async function generateArchitecturalBlueprint(
   materialSchedule: Array<{ item: string; spec: string; qty: string; unit: string }>;
   assemblySteps: string[];
   communityRefs: string[];
+  /** Code-checkable descriptor — fed to checkBuilding() for IBC/ADA findings. */
+  buildingDescriptor?: {
+    doors?: Array<{ id: string; type: 'entry' | 'interior' | 'bathroom' | 'closet' | 'egress'; clearWidthMm: number; clearHeightMm: number }>;
+    stairs?: Array<{ id: string; riserMm: number; treadMm: number; clearWidthMm: number; hasHandrail: boolean; riserCount: number }>;
+    ramps?: Array<{ id: string; slope: number; lengthMm: number; clearWidthMm: number; hasHandrails: boolean; landingLengthMm?: number }>;
+    rooms?: Array<{ id: string; name: string; floorAreaM2: number; windowAreaM2: number; ventilationAreaM2: number; occupancy?: number; isHabitable: boolean }>;
+  };
+  /** Building electrical plan — fed to validateElectricalPlan() + buildPanelSchedule(). */
+  electricalPlan?: {
+    panels: Array<{ id: string; label: string; pos: { x: number; y: number; z: number }; ampRating: number; voltage: 120 | 208 | 240; spaces: number; feederWireAwg: number; workingClearanceFrontMm: number; workingClearanceWidthMm: number; headroomMm: number }>;
+    circuits: Array<{ id: string; number: string; panelId: string; poles: 1 | 2; voltage: 120 | 208 | 240 | 277 | 480; breakerAmp: number; wireAwg: number; deviceIds: string[]; isContinuous: boolean; flags: { gfci: boolean; afci: boolean; dedicated: boolean } }>;
+    devices: Array<{ id: string; kind: string; pos: { x: number; y: number; z: number }; layerTag: string; loadVA: number; isContinuous: boolean; label?: string; roomId?: string }>;
+  };
 }> {
   const unitNote = units === 'imperial'
     ? 'UNITS: dimensions in INCHES. In OpenSCAD multiply by 25.4 to get mm.'
@@ -1043,17 +1143,31 @@ FLOOR PLAN SVG (1px = 10mm):
 - North arrow top-right; scale bar bottom-left
 - Wrap entire plan in <svg> with <title> element
 
+CODE-CHECKABLE DESCRIPTOR (return in buildingDescriptor):
+For EVERY door, stair, ramp, and habitable room in the OpenSCAD model, emit a record so the
+IBC/ADA validator can flag violations. Required fields:
+- doors[]: { id, type (entry/interior/bathroom/closet/egress), clearWidthMm, clearHeightMm }
+- stairs[]: { id, riserMm, treadMm, clearWidthMm, hasHandrail, riserCount }
+- ramps[]:  { id, slope (rise/run e.g. 0.083 = 1:12), lengthMm, clearWidthMm, hasHandrails, landingLengthMm }
+- rooms[]:  { id, name, floorAreaM2, windowAreaM2, ventilationAreaM2, occupancy, isHabitable }
+
+ELECTRICAL PLAN (return in electricalPlan — required for residential/commercial):
+- panels[]:   { id, label, pos:{x,y,z}, ampRating, voltage, spaces, feederWireAwg, workingClearanceFrontMm (≥914 NEC 110.26), workingClearanceWidthMm (≥762), headroomMm (≥2032) }
+- circuits[]: { id, number, panelId, poles, voltage, breakerAmp, wireAwg, deviceIds, isContinuous, flags:{gfci,afci,dedicated} }
+- devices[]:  { id, kind (outlet/gfci_outlet/switch/dimmer/fixture/fan/smoke_detector/co_detector/thermostat/ev_charger/appliance), pos:{x,y,z}, layerTag (E-LITE/E-POWR/...), loadVA, isContinuous, label, roomId }
+Use NEC 2026 defaults: bathrooms/kitchens/outdoor → gfci_outlet; bedrooms → afci; EV chargers → dedicated.
+
 ${advisorContext ? `SESSION CONTEXT:\n${advisorContext}\n` : ''}`;
 
   const contentParts: any[] = [];
   if (referenceImage) {
-    contentParts.push({ inlineData: { data: referenceImage.split(',')[1], mimeType: 'image/png' } });
+    contentParts.push({ inlineData: { data: dataUrlToB64(referenceImage), mimeType: 'image/png' } });
     contentParts.push({ text: 'REFERENCE: use for massing/layout inspiration.\n\n' });
   }
   contentParts.push({ text: `${sysPrompt}\n\nREQUEST: ${prompt}\n\nReturn as JSON.` });
 
   const response = await withRetry(() => ai.models.generateContent({
-    model: 'gemini-3.1-pro-preview',
+    model: MODELS.pro,
     contents: { parts: contentParts },
     config: {
       responseMimeType: 'application/json',
@@ -1076,6 +1190,53 @@ ${advisorContext ? `SESSION CONTEXT:\n${advisorContext}\n` : ''}`;
           },
           assemblySteps: { type: Type.ARRAY, items: { type: Type.STRING } },
           communityRefs: { type: Type.ARRAY, items: { type: Type.STRING } },
+          buildingDescriptor: {
+            type: Type.OBJECT,
+            properties: {
+              doors: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: {
+                id: { type: Type.STRING }, type: { type: Type.STRING },
+                clearWidthMm: { type: Type.NUMBER }, clearHeightMm: { type: Type.NUMBER },
+              }, required: ['id', 'type', 'clearWidthMm', 'clearHeightMm'] } },
+              stairs: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: {
+                id: { type: Type.STRING }, riserMm: { type: Type.NUMBER }, treadMm: { type: Type.NUMBER },
+                clearWidthMm: { type: Type.NUMBER }, hasHandrail: { type: Type.BOOLEAN }, riserCount: { type: Type.NUMBER },
+              }, required: ['id', 'riserMm', 'treadMm', 'clearWidthMm', 'hasHandrail', 'riserCount'] } },
+              ramps: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: {
+                id: { type: Type.STRING }, slope: { type: Type.NUMBER }, lengthMm: { type: Type.NUMBER },
+                clearWidthMm: { type: Type.NUMBER }, hasHandrails: { type: Type.BOOLEAN }, landingLengthMm: { type: Type.NUMBER },
+              }, required: ['id', 'slope', 'lengthMm', 'clearWidthMm', 'hasHandrails'] } },
+              rooms: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: {
+                id: { type: Type.STRING }, name: { type: Type.STRING }, floorAreaM2: { type: Type.NUMBER },
+                windowAreaM2: { type: Type.NUMBER }, ventilationAreaM2: { type: Type.NUMBER },
+                occupancy: { type: Type.NUMBER }, isHabitable: { type: Type.BOOLEAN },
+              }, required: ['id', 'name', 'floorAreaM2', 'windowAreaM2', 'ventilationAreaM2', 'isHabitable'] } },
+            },
+          },
+          electricalPlan: {
+            type: Type.OBJECT,
+            properties: {
+              panels: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: {
+                id: { type: Type.STRING }, label: { type: Type.STRING },
+                pos: { type: Type.OBJECT, properties: { x: { type: Type.NUMBER }, y: { type: Type.NUMBER }, z: { type: Type.NUMBER } }, required: ['x','y','z'] },
+                ampRating: { type: Type.NUMBER }, voltage: { type: Type.NUMBER }, spaces: { type: Type.NUMBER },
+                feederWireAwg: { type: Type.NUMBER },
+                workingClearanceFrontMm: { type: Type.NUMBER }, workingClearanceWidthMm: { type: Type.NUMBER }, headroomMm: { type: Type.NUMBER },
+              }, required: ['id', 'label', 'pos', 'ampRating', 'voltage', 'spaces', 'feederWireAwg', 'workingClearanceFrontMm', 'workingClearanceWidthMm', 'headroomMm'] } },
+              circuits: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: {
+                id: { type: Type.STRING }, number: { type: Type.STRING }, panelId: { type: Type.STRING },
+                poles: { type: Type.NUMBER }, voltage: { type: Type.NUMBER }, breakerAmp: { type: Type.NUMBER }, wireAwg: { type: Type.NUMBER },
+                deviceIds: { type: Type.ARRAY, items: { type: Type.STRING } }, isContinuous: { type: Type.BOOLEAN },
+                flags: { type: Type.OBJECT, properties: { gfci: { type: Type.BOOLEAN }, afci: { type: Type.BOOLEAN }, dedicated: { type: Type.BOOLEAN } }, required: ['gfci', 'afci', 'dedicated'] },
+              }, required: ['id', 'number', 'panelId', 'poles', 'voltage', 'breakerAmp', 'wireAwg', 'deviceIds', 'isContinuous', 'flags'] } },
+              devices: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: {
+                id: { type: Type.STRING }, kind: { type: Type.STRING },
+                pos: { type: Type.OBJECT, properties: { x: { type: Type.NUMBER }, y: { type: Type.NUMBER }, z: { type: Type.NUMBER } }, required: ['x','y','z'] },
+                layerTag: { type: Type.STRING }, loadVA: { type: Type.NUMBER }, isContinuous: { type: Type.BOOLEAN },
+                label: { type: Type.STRING }, roomId: { type: Type.STRING },
+              }, required: ['id', 'kind', 'pos', 'layerTag', 'loadVA', 'isContinuous'] } },
+            },
+            required: ['panels', 'circuits', 'devices'],
+          },
         },
         required: ['name', 'description', 'openscadCode', 'floorPlanSvg', 'layerAssignments', 'buildingCodeNotes', 'assemblySteps'],
       },
@@ -1112,7 +1273,7 @@ export async function analyzeMarkupFeedback(
   projectContext = ''
 ): Promise<MarkupAnalysisResult> {
   const response = await withRetry(() => ai.models.generateContent({
-    model: 'gemini-3.1-flash-preview',
+    model: MODELS.flash,
     contents: {
       parts: [
         { inlineData: { data: markupImageBase64.replace(/^data:image\/\w+;base64,/, ''), mimeType: 'image/png' } },
@@ -1175,7 +1336,7 @@ export async function detectSemanticBlocks(openscadCode: string): Promise<{
   summary: string;
 }> {
   const response = await withRetry(() => ai.models.generateContent({
-    model: 'gemini-3.1-pro-preview',
+    model: MODELS.pro,
     contents: `You are an OpenSCAD expert performing a Smart Blocks refactor (like AutoCAD "Detect and Convert").
 
 CODE:
@@ -1229,7 +1390,7 @@ export async function generateConceptSheet(
 
   const parts: any[] = [];
   if (referenceImage) {
-    parts.push({ inlineData: { data: referenceImage.split(',')[1], mimeType: 'image/png' } });
+    parts.push({ inlineData: { data: dataUrlToB64(referenceImage), mimeType: 'image/png' } });
     parts.push({ text: `Use the provided reference image as a visual guide for the design.\n\n` });
   }
   parts.push({ text: `Generate a CONCEPT DESIGN SHEET for: ${prompt}
@@ -1247,7 +1408,7 @@ ${sketchStyleDirective}
 This must look like a professional industrial design concept sheet — hand-drawn quality, not CAD or photo-realistic.` });
 
   const response = await withRetry(() => ai.models.generateContent({
-    model: 'gemini-3.1-flash-image-preview',
+    model: MODELS.flashImage,
     contents: { parts },
     config: {
       imageConfig: {

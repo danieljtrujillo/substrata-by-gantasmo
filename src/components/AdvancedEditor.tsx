@@ -63,16 +63,17 @@ export const AdvancedEditor: React.FC<AdvancedEditorProps> = ({ imageUrl, onSave
     const pos = e.target.getStage().getPointerPosition();
 
     if (tool === 'eraser' && lines.length > 0) {
-      const lastLine = lines[lines.length - 1];
-      lastLine.points = lastLine.points.concat([pos.x, pos.y]);
-      lines.splice(lines.length - 1, 1, lastLine);
-      setLines(lines.concat());
+      setLines(prev => {
+        const last = prev[prev.length - 1];
+        const updated = { ...last, points: [...last.points, pos.x, pos.y] };
+        return [...prev.slice(0, -1), updated];
+      });
     } else if (tool === 'box' && rects.length > 0) {
-      const lastRect = rects[rects.length - 1];
-      lastRect.width = pos.x - lastRect.x;
-      lastRect.height = pos.y - lastRect.y;
-      rects.splice(rects.length - 1, 1, lastRect);
-      setRects(rects.concat());
+      setRects(prev => {
+        const last = prev[prev.length - 1];
+        const updated = { ...last, width: pos.x - last.x, height: pos.y - last.y };
+        return [...prev.slice(0, -1), updated];
+      });
     }
   };
 
@@ -270,30 +271,40 @@ export const AdvancedEditor: React.FC<AdvancedEditorProps> = ({ imageUrl, onSave
             <Plus className="absolute left-2.5 top-3 w-3 h-3 text-white/20" />
           </div>
 
+          {/*
+            AI edit buttons. Gemini Flash Image is text-to-image — it has no
+            mask-conditioned inpainting API, so these all generate a fresh
+            image guided by the prompt + the current stage as a reference.
+            Labels reflect that ("Edit / Extend / Restyle") rather than the
+            CAD-style "Inpaint / Outpaint" which would overpromise.
+          */}
           <div className="flex gap-1 shrink-0">
-              <Button 
-                variant="outline" 
-                size="sm" 
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => handleSynthesis('inpaint')}
+                title="AI edit — regenerates the image guided by the current stage and prompt. Not a true masked inpaint."
                 className="h-8 border-white/10 text-[9px] font-black uppercase hover:bg-laser-accent/20 hover:text-laser-accent px-3"
               >
-                Inpaint Mask
+                AI Edit
               </Button>
-              <Button 
-                variant="outline" 
-                size="sm" 
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => handleSynthesis('outpaint')}
+                title="AI extend — regenerates with the current image as a layout cue. Not a true outpaint."
                 className="h-8 border-white/10 text-[9px] font-black uppercase hover:bg-laser-accent/20 hover:text-laser-accent px-3"
               >
-                Outpaint Edge
+                AI Extend
               </Button>
-              <Button 
-                variant="outline" 
-                size="sm" 
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => handleSynthesis('style')}
+                title="AI restyle — regenerates the entire image in the requested style."
                 className="h-8 border-white/10 text-[9px] font-black uppercase hover:bg-laser-accent/20 hover:text-laser-accent px-3"
               >
-                Style Transfer
+                AI Restyle
               </Button>
           </div>
       </div>

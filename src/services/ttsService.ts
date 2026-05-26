@@ -2,6 +2,50 @@ import { GoogleGenAI, Modality } from "@google/genai";
 
 const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
 
+// Centralised model — change once when upgrading.
+// https://ai.google.dev/gemini-api/docs/models
+export const TTS_MODEL = 'gemini-3.1-flash-tts-preview';
+
+// All 30 prebuilt Gemini voices with their character descriptions.
+// Names map directly to prebuiltVoiceConfig.voiceName.
+// https://ai.google.dev/gemini-api/docs/speech-generation
+export const TTS_VOICES = [
+  { name: 'Zephyr',         character: 'Bright' },
+  { name: 'Puck',           character: 'Upbeat' },
+  { name: 'Charon',         character: 'Informative' },
+  { name: 'Kore',           character: 'Firm' },
+  { name: 'Fenrir',         character: 'Excitable' },
+  { name: 'Leda',           character: 'Youthful' },
+  { name: 'Orus',           character: 'Firm' },
+  { name: 'Aoede',          character: 'Breezy' },
+  { name: 'Callirrhoe',     character: 'Easy-going' },
+  { name: 'Autonoe',        character: 'Bright' },
+  { name: 'Enceladus',      character: 'Breathy' },
+  { name: 'Iapetus',        character: 'Clear' },
+  { name: 'Umbriel',        character: 'Easy-going' },
+  { name: 'Algieba',        character: 'Smooth' },
+  { name: 'Despina',        character: 'Smooth' },
+  { name: 'Erinome',        character: 'Clear' },
+  { name: 'Algenib',        character: 'Gravelly' },
+  { name: 'Rasalgethi',     character: 'Informative' },
+  { name: 'Laomedeia',      character: 'Upbeat' },
+  { name: 'Achernar',       character: 'Soft' },
+  { name: 'Alnilam',        character: 'Firm' },
+  { name: 'Schedar',        character: 'Even' },
+  { name: 'Gacrux',         character: 'Mature' },
+  { name: 'Pulcherrima',    character: 'Forward' },
+  { name: 'Achird',         character: 'Friendly' },
+  { name: 'Zubenelgenubi',  character: 'Casual' },
+  { name: 'Vindemiatrix',   character: 'Gentle' },
+  { name: 'Sadachbia',      character: 'Lively' },
+  { name: 'Sadaltager',     character: 'Knowledgeable' },
+  { name: 'Sulafat',        character: 'Warm' },
+] as const;
+
+export type VoiceName = typeof TTS_VOICES[number]['name'];
+
+export const DEFAULT_VOICE: VoiceName = 'Kore';
+
 let currentAudioSource: AudioBufferSourceNode | null = null;
 let currentAudioContext: AudioContext | null = null;
 
@@ -43,10 +87,10 @@ function decodeRawAudio(base64Audio: string): AudioBuffer {
 /** Generate TTS audio and return the raw AudioBuffer without playing it */
 export async function generateAudioBuffer(
   text: string,
-  voice: 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr' = 'Kore'
+  voice: VoiceName = DEFAULT_VOICE
 ): Promise<AudioBuffer | null> {
   const response = await ai.models.generateContent({
-    model: "gemini-3.1-flash-tts-preview",
+    model: TTS_MODEL,
     contents: [{ parts: [{ text: `Say clearly: ${text}` }] }],
     config: {
       responseModalities: [Modality.AUDIO],
@@ -75,7 +119,7 @@ export function playBuffer(buf: AudioBuffer): AudioBufferSourceNode {
 }
 
 /** Legacy: generate + immediately play (used when not per-message) */
-export async function speakText(text: string, voice: 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr' = 'Kore') {
+export async function speakText(text: string, voice: VoiceName = DEFAULT_VOICE) {
   const buf = await generateAudioBuffer(text, voice);
   if (buf) playBuffer(buf);
 }

@@ -302,6 +302,13 @@ Hacker mode wires Gemini straight into a canonical schematic intermediate repres
 - **Component library** — Pin definitions for ESP32 DevKit, Arduino Nano, RPi Pico, A4988 / TMC2209 drivers, OLED, MPU6050, HC-SR04, WS2812B and more
 - **PCB right-rail panel** — Ships in the toolbar when hacker mode is active, gated behind a `PCB` button next to the standard 3D-output stack
 
+> ⚠ **Import baseline, not final layout.** The emitter approximates symbol pin
+> positions on a 200-mil grid because it doesn't read your KiCad symbol
+> libraries. Schematics with 2–6-pin parts look clean; ICs with many pins
+> (ESP32, RP2040) will need wire re-routing in KiCad after import. Nets are
+> star-routed from pin 0 — let KiCad collapse them on the next save, or
+> rewire by hand for production schematics.
+
 ### Reference Library (Open-Access Scraper)
 
 The **Library** modal is fed by a pluggable `ScraperAdapter` framework in [`src/lib/scraper`](src/lib/scraper). Two adapters ship by default — both license-clean by construction:
