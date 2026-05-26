@@ -7,6 +7,11 @@ export interface Env {
   /** Server-side Gemini key — NEVER prefix VITE_, NEVER expose to browser. */
   GEMINI_API_KEY: string;
   /**
+   * api.data.gov key for the Smithsonian Open Access scraper. Optional —
+   * when absent, /api/scraper/smithsonian/* returns 503 with `scraper_disabled`.
+   */
+  SMITHSONIAN_API_KEY?: string;
+  /**
    * Optional KV namespace for rate-limit counters and PKCE verifiers.
    * If unbound, rate limiting falls open (allow all) and PKCE storage falls
    * back to a short-lived cookie. Bind via:

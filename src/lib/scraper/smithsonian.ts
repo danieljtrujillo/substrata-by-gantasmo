@@ -3,22 +3,18 @@
 // API: api.si.edu/openaccess/api/v1.0 — requires a free api.data.gov key.
 // Open Access items are CC0; we still verify per-record via the access field.
 // Docs: https://www.si.edu/openaccess  &  https://edan.si.edu/openaccess/docs/
+//
+// The browser never holds the api.data.gov key. All calls route through
+// /api/scraper/smithsonian/search and /api/scraper/smithsonian/fetch
+// (Cloudflare Pages Functions) which read SMITHSONIAN_API_KEY server-side
+// and forward to api.si.edu with a Smithsonian-host whitelist on the
+// asset-fetch endpoint.
 
 import type {
   ScraperAdapter, AssetHit, FetchedAsset, SearchFilters, SpdxLicense, FileFormat,
 } from './types';
-import { politeFetch } from './throttle';
 import { sha256Hex } from './hash';
 import { registerAdapter } from './registry';
-
-const BASE = 'https://api.si.edu/openaccess/api/v1.0';
-
-function getApiKey(): string {
-  const k = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_SMITHSONIAN_API_KEY)
-    ?? (typeof process !== 'undefined' && process.env?.SMITHSONIAN_API_KEY);
-  if (!k) throw new Error('SMITHSONIAN_API_KEY missing — get a free key at api.data.gov/signup');
-  return k as string;
-}
 
 function detectFormat(url: string): FileFormat | null {
   const m = url.toLowerCase().match(/\.(stl|glb|gltf|obj|step|dxf|svg|jpg|jpeg|png|tiff?|pdf)(\?|$)/);
@@ -59,14 +55,20 @@ export const smithsonianAdapter: ScraperAdapter = {
   async search(filters: SearchFilters): Promise<AssetHit[]> {
     const limit = Math.min(filters.limit ?? 20, 100);
     const cursor = filters.cursor ? parseInt(filters.cursor, 10) : 0;
-    // Bias toward Open Access + 3D where requested
-    let q = filters.query;
-    if (filters.kind === '3d_model') q += ' AND online_media_type:"3D Images"';
-    q += ' AND unit_code:* AND metadata_usage:CC0';
+    const params = new URLSearchParams({
+      q: filters.query,
+      limit: String(limit),
+      cursor: String(cursor),
+    });
+    if (filters.kind) params.set('kind', filters.kind);
 
-    const url = `${BASE}/search?api_key=${getApiKey()}&q=${encodeURIComponent(q)}&start=${cursor}&rows=${limit}`;
-    const res = await politeFetch(url);
-    if (!res.ok) throw new Error(`smithsonian search failed: ${res.status} ${res.statusText}`);
+    const res = await fetch(`/api/scraper/smithsonian/search?${params.toString()}`, {
+      credentials: 'include',
+    });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      throw new Error(`smithsonian search failed: ${res.status} ${detail?.error ?? ''}`);
+    }
     const data: any = await res.json();
     const rows: any[] = data?.response?.rows ?? [];
 
@@ -95,8 +97,15 @@ export const smithsonianAdapter: ScraperAdapter = {
   },
 
   async fetchAsset(hit: AssetHit): Promise<FetchedAsset> {
-    const res = await politeFetch(hit.downloadUrl);
-    if (!res.ok) throw new Error(`smithsonian fetch failed: ${res.status}`);
+    // Route the binary fetch through the Cloudflare proxy. The Pages Function
+    // whitelists Smithsonian hosts so this endpoint can't be repurposed as
+    // an open relay against arbitrary URLs.
+    const proxyUrl = `/api/scraper/smithsonian/fetch?url=${encodeURIComponent(hit.downloadUrl)}`;
+    const res = await fetch(proxyUrl, { credentials: 'include' });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      throw new Error(`smithsonian fetch failed: ${res.status} ${detail?.error ?? ''}`);
+    }
     const buffer = await res.arrayBuffer();
     const sha256 = await sha256Hex(buffer);
     return {

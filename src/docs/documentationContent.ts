@@ -1068,17 +1068,16 @@ The app will be available at \`http://localhost:3000\`.
 
 ### Frontend Environment Variables (\`.env\`)
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| \`VITE_SMITHSONIAN_API_KEY\` | No | Smithsonian Open Access API key for the Library scraper |
+No frontend variables are required. \`APP_URL\` is optional and only used by AI Studio at runtime.
 
-> The Gemini key is no longer a frontend variable. Set \`GEMINI_API_KEY\` as a Cloudflare Pages secret (see below). Every AI call routes through \`functions/api/ai/relay.ts\` so the key stays server-side.
+> Both the Gemini and Smithsonian keys are server-side bindings. AI calls route through \`functions/api/ai/relay.ts\`. Smithsonian searches and asset downloads route through \`functions/api/scraper/smithsonian/search.ts\` and \`functions/api/scraper/smithsonian/fetch.ts\`.
 
 ### Cloudflare Pages Secrets (set via dashboard or \`wrangler pages secret put\`)
 
 | Secret | Required | Description |
 |--------|----------|-------------|
 | \`GEMINI_API_KEY\` | Yes | Server-side Gemini key read by \`/api/ai/relay\` |
+| \`SMITHSONIAN_API_KEY\` | No | api.data.gov key read by \`/api/scraper/smithsonian/*\`. When absent, the Library scraper returns 503 \`scraper_disabled\` |
 | \`GOOGLE_CLIENT_ID\` | Yes | Google OAuth 2.0 Client ID |
 | \`GOOGLE_CLIENT_SECRET\` | Yes | Google OAuth 2.0 Client Secret |
 | \`JWT_SECRET\` | Yes | Random string for signing session JWTs (32+ bytes of entropy) |

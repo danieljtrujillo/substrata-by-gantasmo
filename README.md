@@ -693,19 +693,20 @@ npm run dev:full
 ### Environment Variables
 
 ```env
-# Optional public bundle var — only the Smithsonian adapter needs one.
-VITE_SMITHSONIAN_API_KEY=optional_smithsonian_key
+# No frontend variables required. APP_URL is optional and only used by AI Studio.
+APP_URL=
 ```
 
-> The Gemini API key is **never** in the browser bundle. All AI calls go
-> through `/api/ai/relay` (Cloudflare Pages Function) which reads
-> `GEMINI_API_KEY` from the server-side env binding. Set it as a
-> Cloudflare secret, not as a `VITE_*` var.
+> The Gemini and Smithsonian keys are **never** in the browser bundle. AI
+> calls go through `/api/ai/relay`. Library searches and asset downloads go
+> through `/api/scraper/smithsonian/search` and `/api/scraper/smithsonian/fetch`.
+> Both keys are Cloudflare Pages env bindings.
 
 ### Cloudflare Secrets (set via dashboard or `wrangler pages secret put`)
 
 ```
 GEMINI_API_KEY=your_gemini_api_key                       # server-side only
+SMITHSONIAN_API_KEY=your_api_data_gov_key                # server-side only, optional
 GOOGLE_CLIENT_ID=your_google_oauth_client_id
 GOOGLE_CLIENT_SECRET=your_google_oauth_client_secret
 JWT_SECRET=a_random_secret_string_for_signing_session_tokens

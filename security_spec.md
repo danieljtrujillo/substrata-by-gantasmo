@@ -114,13 +114,12 @@ billing. Those expansions will require additional rules.
 | Secret                     | Where stored                                | How read                       |
 |----------------------------|---------------------------------------------|--------------------------------|
 | `GEMINI_API_KEY`           | Cloudflare Pages env binding (secret)       | `context.env.GEMINI_API_KEY` — server-side only, read by [functions/api/ai/relay.ts](functions/api/ai/relay.ts). |
+| `SMITHSONIAN_API_KEY`      | Cloudflare Pages env binding (secret)       | `context.env.SMITHSONIAN_API_KEY` — server-side only, read by [functions/api/scraper/smithsonian/search.ts](functions/api/scraper/smithsonian/search.ts) and [fetch.ts](functions/api/scraper/smithsonian/fetch.ts). Optional. |
 | `GOOGLE_CLIENT_ID`         | Cloudflare Pages env binding                | `context.env.GOOGLE_CLIENT_ID` |
 | `GOOGLE_CLIENT_SECRET`     | Cloudflare Pages env binding (secret)       | `context.env.GOOGLE_CLIENT_SECRET` |
 | `JWT_SECRET`               | Cloudflare Pages env binding (secret)       | `context.env.JWT_SECRET`       |
-| `VITE_SMITHSONIAN_API_KEY` | GitHub Actions secret → Vite `define`       | `import.meta.env` — **public after build** |
 
-The single `VITE_*` key is injected into the browser bundle at build time —
-treat it as **public**. Restrict by Smithsonian referer policy.
+No `VITE_*` secrets ship in the bundle. Every key is read server-side by a Pages Function.
 
 ### AI key handling (Gemini)
 
@@ -134,6 +133,17 @@ The relay enforces per-identity rate limits (30 req/hour anonymous, 300
 req/hour authenticated) via Cloudflare KV. When KV is unbound the limiter
 fails open — useful for first-deploy but you should bind a KV namespace
 before exposing the deploy publicly.
+
+### Smithsonian scraper proxy
+
+The api.data.gov key (`SMITHSONIAN_API_KEY`) also stays server-side. The
+Library panel adapter at [src/lib/scraper/smithsonian.ts](src/lib/scraper/smithsonian.ts)
+calls `/api/scraper/smithsonian/search` for queries and `/api/scraper/smithsonian/fetch`
+for asset downloads. The fetch route enforces a Smithsonian-host whitelist
+(`api.si.edu`, `3d-api.si.edu`, `ids.si.edu`, `collections.si.edu`,
+`siris-archives.si.edu`, `siris-libraries.si.edu`, `edan.si.edu`, `www.si.edu`)
+and a 64 MiB per-asset cap so the proxy cannot be repurposed as an open
+relay. Both endpoints are rate-limited (60 searches/min, 30 fetches/min per IP).
 
 ## 8. XSS
 
