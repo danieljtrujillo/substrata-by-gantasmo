@@ -7,3 +7,11 @@ pages_build_output_dir = "dist"
 binding = "DB"
 database_name = "substrata-db"
 database_id = "1e123d1e-778f-4ad0-906a-22a63c80e165"
+
+# KV namespace for PKCE verifiers + auth/AI rate-limit counters.
+# Create one with:  npx wrangler kv namespace create RATE_LIMIT
+# then uncomment + paste the returned id. While unbound, the rate limiter
+# fails open (allows all requests) and PKCE falls back to an HttpOnly cookie.
+# [[kv_namespaces]]
+# binding = "RATE_LIMIT"
+# id = "REPLACE_WITH_REAL_KV_ID"

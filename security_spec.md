@@ -49,6 +49,17 @@ billing. Those expansions will require additional rules.
   cookie via constant-time comparison and rejects any mismatch with
   `?auth_error=state_mismatch`. The state cookie is cleared on both
   success and failure paths.
+- **PKCE (RFC 7636):** The login route also generates a 32-byte random
+  `code_verifier`, derives `code_challenge = base64url(SHA-256(verifier))`,
+  sends the challenge to Google with `code_challenge_method=S256`, and
+  stores the verifier server-side (Cloudflare KV preferred, HttpOnly cookie
+  fallback) keyed by the state. The callback retrieves the verifier and
+  passes it to `oauth2.googleapis.com/token` for exchange. If the verifier
+  is missing or mismatched, Google rejects the token request — closing the
+  authorization-code-injection attack.
+- **Rate limiting:** `/api/auth/callback` is rate-limited to 20 requests per
+  minute per client IP via the KV-backed rate limiter. Blocks code-spam
+  attacks that would otherwise hammer Google's token endpoint + D1.
 - **Email verification:** Tokens whose `userinfo` returns
   `email_verified=false` are rejected with `?auth_error=email_not_verified`.
 - **User upsert:** Successful authentication upserts the user row keyed by
@@ -100,17 +111,29 @@ billing. Those expansions will require additional rules.
 
 ## 7. Secrets Management
 
-| Secret             | Where stored                                | How read                       |
-|--------------------|---------------------------------------------|--------------------------------|
-| `GOOGLE_CLIENT_ID` | Cloudflare Pages env binding                | `context.env.GOOGLE_CLIENT_ID` |
-| `GOOGLE_CLIENT_SECRET` | Cloudflare Pages env binding (secret)   | `context.env.GOOGLE_CLIENT_SECRET` |
-| `JWT_SECRET`       | Cloudflare Pages env binding (secret)       | `context.env.JWT_SECRET`       |
-| `VITE_GEMINI_API_KEY` | GitHub Actions secret → Vite `define`    | `import.meta.env`              |
-| `VITE_SMITHSONIAN_API_KEY` | GitHub Actions secret → Vite `define` | `import.meta.env`              |
+| Secret                     | Where stored                                | How read                       |
+|----------------------------|---------------------------------------------|--------------------------------|
+| `GEMINI_API_KEY`           | Cloudflare Pages env binding (secret)       | `context.env.GEMINI_API_KEY` — server-side only, read by [functions/api/ai/relay.ts](functions/api/ai/relay.ts). |
+| `GOOGLE_CLIENT_ID`         | Cloudflare Pages env binding                | `context.env.GOOGLE_CLIENT_ID` |
+| `GOOGLE_CLIENT_SECRET`     | Cloudflare Pages env binding (secret)       | `context.env.GOOGLE_CLIENT_SECRET` |
+| `JWT_SECRET`               | Cloudflare Pages env binding (secret)       | `context.env.JWT_SECRET`       |
+| `VITE_SMITHSONIAN_API_KEY` | GitHub Actions secret → Vite `define`       | `import.meta.env` — **public after build** |
 
-The two `VITE_*` keys are injected into the browser bundle at build time —
-treat them as **public**. Restrict them by Google/Smithsonian referer policy.
-The three Pages env bindings are never exposed to the browser.
+The single `VITE_*` key is injected into the browser bundle at build time —
+treat it as **public**. Restrict by Smithsonian referer policy.
+
+### AI key handling (Gemini)
+
+The Gemini API key (`GEMINI_API_KEY`) **never enters the browser bundle**.
+Vite is no longer given a `VITE_GEMINI_API_KEY` `define`. All AI calls in
+[src/services/geminiService.ts](src/services/geminiService.ts) and
+[src/services/ttsService.ts](src/services/ttsService.ts) `fetch('/api/ai/relay', …)`;
+the Pages Function reads `context.env.GEMINI_API_KEY` and forwards to Google.
+
+The relay enforces per-identity rate limits (30 req/hour anonymous, 300
+req/hour authenticated) via Cloudflare KV. When KV is unbound the limiter
+fails open — useful for first-deploy but you should bind a KV namespace
+before exposing the deploy publicly.
 
 ## 8. XSS
 
@@ -129,13 +152,14 @@ work should formalise the `laserSettings` / `procOptions` schemas
 
 | ID    | Gap                                                                | Severity | Status   |
 |-------|--------------------------------------------------------------------|----------|----------|
-| SEC-1 | No PKCE on the OAuth flow (confidential-client only)               | Medium   | Backlog  |
-| SEC-2 | No rate limiting on `/api/auth/callback` or `/api/projects/*`      | Medium   | Backlog  |
+| SEC-1 | No PKCE on the OAuth flow (confidential-client only)               | Medium   | **Fixed** — RFC 7636 PKCE with SHA-256, verifier in KV with cookie fallback |
+| SEC-2 | No rate limiting on `/api/auth/callback` or `/api/ai/relay`        | Medium   | **Fixed** — KV-backed sliding-window limiter (20/min auth callback, 30/h anon / 300/h auth on AI relay). Fails open if KV unbound. |
 | SEC-3 | JWT verifier does not check `iss`/`aud` claims                     | Low      | **Fixed** — `iss=substrata-by-gantasmo`, `aud=substrata-web`, `nbf`/`exp` with 60s leeway |
-| SEC-4 | No formal schema for `laserSettings` / `procOptions`               | Low      | Backlog  |
+| SEC-4 | No formal schema for `laserSettings` / `procOptions`               | Low      | **Fixed** — Zod schemas in [functions/api/projects/schema.ts](functions/api/projects/schema.ts) with strict shape + 2 MiB row cap |
 | SEC-5 | CSP header not shipped in `public/_headers`                        | Medium   | Backlog  |
 | SEC-6 | AI-generated "community search" output rendered via dangerouslySetInnerHTML — sanitised: HTML-escape first, then re-allow `**bold**` and `\n` only | High | **Fixed** |
 | SEC-7 | `wrangler.toml` carries the production `database_id`               | Low      | Backlog  |
+| SEC-8 | Gemini API key bundled into browser via `VITE_GEMINI_API_KEY`      | **Critical** | **Fixed** — server-side relay; key never enters browser bundle |
 
 ## 11. Verified Properties (Manual Audit, 2026-05-26)
 

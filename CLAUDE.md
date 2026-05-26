@@ -82,10 +82,20 @@ does, switch to it.
 
 ## Other project conventions
 
+- **Gemini API key NEVER lives in the browser.** All calls go through
+  `functions/api/ai/relay.ts`. The client uses `fetch('/api/ai/relay', …)`,
+  never `new GoogleGenAI({apiKey})`. If you need a new Gemini feature on
+  the client, add it to the relay first. `VITE_GEMINI_API_KEY` no longer
+  exists — set `GEMINI_API_KEY` as a Cloudflare Pages env binding.
 - **Models / TTS voices** live in `src/services/geminiService.ts:MODELS` and
   `src/services/ttsService.ts:TTS_VOICES, TTS_MODEL`. Upgrade in those two
   files — every callsite uses the constants.
+- **OpenSCAD rendering** prefers `src/lib/openscadParser.ts:evaluateOpenSCAD`
+  for the AST path (handles polyhedron, linear_extrude, modules, for-loops,
+  variables). The legacy regex parser in `App.tsx:parseOpenSCAD` is the
+  fallback for code the AST evaluator chokes on. Don't add new features to
+  the regex parser — extend the AST evaluator instead.
 - **`security_spec.md`** is the authoritative security document. Update it
-  when changing auth, sessions, cookies, or D1 access patterns.
+  when changing auth, sessions, cookies, D1 access, or the AI relay.
 - **No `dangerouslySetInnerHTML` on user-controlled input** — see
-  security_spec.md SEC-6 for the one open exception.
+  security_spec.md SEC-6 for the one open exception (sanitised).

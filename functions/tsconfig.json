@@ -7,7 +7,12 @@
     "moduleResolution": "bundler",
     "isolatedModules": true,
     "noEmit": true,
-    "strict": true
+    "strict": true,
+    // Pulling zod adds @types/node transitively; their global declarations
+    // clash with @cloudflare/workers-types' web-platform globals. Cloudflare
+    // is the authoritative set for Workers runtime — skip lib check on the
+    // rest so we don't drown in d.ts conflicts.
+    "skipLibCheck": true
   },
   "include": ["./**/*.ts"]
 }

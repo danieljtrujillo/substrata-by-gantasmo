@@ -1,6 +1,7 @@
 // GET /api/projects — List all projects for authenticated user
 // POST /api/projects — Create or update a project
 import type { Env, AuthenticatedData } from '../../types';
+import { ProjectCreateSchema, exceedsSize, validationErrorResponse } from './schema';
 
 export const onRequestGet: PagesFunction<Env, string, AuthenticatedData> = async (context) => {
   const userId = context.data.user.sub;
@@ -27,24 +28,33 @@ export const onRequestGet: PagesFunction<Env, string, AuthenticatedData> = async
 
 export const onRequestPost: PagesFunction<Env, string, AuthenticatedData> = async (context) => {
   const userId = context.data.user.sub;
-  const body = await context.request.json() as Record<string, unknown>;
-
-  const id = body.id as string;
-  const name = body.name as string;
-  if (!id || !name) {
-    return Response.json({ error: 'id and name are required' }, { status: 400 });
+  let rawBody: unknown;
+  try {
+    rawBody = await context.request.json();
+  } catch {
+    return Response.json({ error: 'invalid_json' }, { status: 400 });
   }
 
+  // Reject oversized payloads before we even attempt to validate fields —
+  // protects against multi-MB image-blob bombs.
+  if (exceedsSize(rawBody)) {
+    return Response.json({ error: 'payload_too_large' }, { status: 413 });
+  }
+
+  const parsed = ProjectCreateSchema.safeParse(rawBody);
+  if (!parsed.success) return validationErrorResponse(parsed.error);
+  const body = parsed.data;
+
   const now = new Date().toISOString();
-  const laserSettings = JSON.stringify(body.laserSettings || {});
-  const procOptions = JSON.stringify(body.procOptions || {});
-  const originalImage = (body.originalImage as string) || null;
-  const processedImage = (body.processedImage as string) || null;
+  const laserSettings = JSON.stringify(body.laserSettings ?? {});
+  const procOptions = JSON.stringify(body.procOptions ?? {});
+  const originalImage = body.originalImage ?? null;
+  const processedImage = body.processedImage ?? null;
 
   // Check if project exists
   const existing = await context.env.DB.prepare(
     'SELECT id, user_id FROM projects WHERE id = ?'
-  ).bind(id).first();
+  ).bind(body.id).first();
 
   if (existing) {
     // Verify ownership
@@ -56,7 +66,7 @@ export const onRequestPost: PagesFunction<Env, string, AuthenticatedData> = asyn
        laser_settings = ?, proc_options = ?, updated_at = ?
        WHERE id = ? AND user_id = ?`
     )
-      .bind(name, originalImage, processedImage, laserSettings, procOptions, now, id, userId)
+      .bind(body.name, originalImage, processedImage, laserSettings, procOptions, now, body.id, userId)
       .run();
   } else {
     await context.env.DB.prepare(
@@ -64,9 +74,9 @@ export const onRequestPost: PagesFunction<Env, string, AuthenticatedData> = asyn
        laser_settings, proc_options, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-      .bind(id, userId, name, originalImage, processedImage, laserSettings, procOptions, now, now)
+      .bind(body.id, userId, body.name, originalImage, processedImage, laserSettings, procOptions, now, now)
       .run();
   }
 
-  return Response.json({ ok: true, id });
+  return Response.json({ ok: true, id: body.id });
 };

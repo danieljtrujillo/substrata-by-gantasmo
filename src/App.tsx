@@ -27,6 +27,7 @@ import {
   Mic,
   MicOff,
   Volume2,
+  VolumeX,
   Wrench,
   History,
   ShieldAlert,
@@ -133,6 +134,7 @@ import {
 import { LibraryPanel as AssetLibraryPanel, HackerPanel, ArchitecturePanel } from './components/StudioModePanels';
 import type { BuildingDescriptor } from './lib/buildingCodeRules';
 import type { ElectricalPlan } from './lib/electricalPlan';
+import { evaluateOpenSCAD, type EvaluatedPrimitive } from './lib/openscadParser';
 import type { IndexedAsset } from './lib/scraper/ingest';
 import { speakText, cancelSpeech, generateAudioBuffer, playBuffer, TTS_VOICES, DEFAULT_VOICE, type VoiceName } from './services/ttsService';
 import { ACMER_S1_PARAMETERS, ACMER_S1_MANUAL_SUMMARY, PROJECT_TEMPLATES, LaserSettings, LabelSettings, LABEL_SIZE_PRESETS, MUNBYN_ITPP130B, PRINTER_DATABASE, LASER_DATABASE } from './constants';
@@ -201,12 +203,18 @@ function Tip({ text, children, side = 'top' }: { text: string; children: React.R
 // Parses the generated OpenSCAD code and renders real Three.js geometry
 
 interface ParsedPrimitive {
-  type: 'cube' | 'cylinder' | 'sphere' | 'hull';
+  type: 'cube' | 'cylinder' | 'sphere' | 'hull' | 'polyhedron' | 'extrude';
   args: number[];
   position: [number, number, number];
   rotation: [number, number, number];
   color: string;
   label: string;
+  // Rich geometry payloads for the new parser. cube/cylinder/sphere keep
+  // using `args` for backward compatibility with the regex-parser path.
+  vertices?: [number, number, number][];
+  faces?: number[][];
+  polygon?: [number, number][];
+  height?: number;
 }
 
 const PART_COLORS = [
@@ -217,6 +225,22 @@ const PART_COLORS = [
 function parseOpenSCAD(code: string): ParsedPrimitive[] {
   const primitives: ParsedPrimitive[] = [];
   if (!code || code.startsWith('//')) return primitives;
+
+  // ── Primary path: real recursive-descent parser ───────────────────────
+  // Handles polyhedron(), linear_extrude(polygon(...)), nested transforms,
+  // for-loops, variable resolution, and module instantiation. If parsing
+  // succeeds AND produces output we use it. On failure we fall through to
+  // the legacy regex parser below — safety net for OpenSCAD edge cases the
+  // new evaluator doesn't model (list comprehensions, $fn animation, etc).
+  try {
+    const evaluated = evaluateOpenSCAD(code);
+    if (evaluated.length > 0) {
+      const adapted = evaluated.map(adaptEvaluatedPrimitive);
+      return normalizeScene(adapted);
+    }
+  } catch {
+    // fall through to regex parser
+  }
 
   // Better module extraction: match braces to handle nested blocks
   const extractModules = (src: string): { name: string, body: string }[] => {
@@ -466,6 +490,33 @@ function extractPrimitives(body: string, moduleName: string, color: string, out:
 }
 
 // Compute uniform scale factor so the entire scene fits in a ~10-unit viewport
+/**
+ * Convert an `EvaluatedPrimitive` (OpenSCAD native coords: X right, Y away,
+ * Z up; sizes in mm) into the `ParsedPrimitive` shape the renderer consumes
+ * (Three.js convention: X right, Y up, Z toward viewer; sizes in scene units).
+ *
+ * Y/Z swap is consistent with the legacy regex parser's convention.
+ */
+function adaptEvaluatedPrimitive(p: EvaluatedPrimitive): ParsedPrimitive {
+  const pos: [number, number, number] = [p.position[0], p.position[2], p.position[1]];
+  const rot: [number, number, number] = [
+    p.rotation[0] * Math.PI / 180,
+    p.rotation[2] * Math.PI / 180,
+    p.rotation[1] * Math.PI / 180,
+  ];
+  const base = { position: pos, rotation: rot, color: p.color, label: p.subtractive ? `${p.label}_hole` : p.label };
+  if (p.type === 'cube')      return { type: 'cube',     args: [p.size[0], p.size[2], p.size[1]], ...base };
+  if (p.type === 'sphere')    return { type: 'sphere',   args: [p.radius, p.segments, p.segments], ...base };
+  if (p.type === 'cylinder')  return { type: 'cylinder', args: [p.r1, p.r2, p.h, p.segments], ...base };
+  if (p.type === 'polyhedron') {
+    // Swap Y/Z for vertex coords too so the mesh matches translate/rotate.
+    const verts = p.vertices.map(v => [v[0], v[2], v[1]] as [number, number, number]);
+    return { type: 'polyhedron', args: [], vertices: verts, faces: p.faces, ...base };
+  }
+  // extrude: polygon is 2D (xy), height extrudes along z in OpenSCAD → y in scene.
+  return { type: 'extrude', args: [], polygon: p.polygon, height: p.height, ...base };
+}
+
 function normalizeScene(primitives: ParsedPrimitive[]): ParsedPrimitive[] {
   if (primitives.length === 0) return primitives;
 
@@ -479,6 +530,24 @@ function normalizeScene(primitives: ParsedPrimitive[]): ParsedPrimitive[] {
     if (p.type === 'cube') { extX = p.args[0] / 2; extY = p.args[1] / 2; extZ = p.args[2] / 2; }
     else if (p.type === 'cylinder') { const r = Math.max(p.args[0], p.args[1]); extX = r; extZ = r; extY = p.args[2] / 2; }
     else if (p.type === 'sphere') { extX = extY = extZ = p.args[0]; }
+    else if (p.type === 'polyhedron' && p.vertices) {
+      // Local bounding box of the vertex cloud; extents are half-spans.
+      let lx0 = Infinity, ly0 = Infinity, lz0 = Infinity, lx1 = -Infinity, ly1 = -Infinity, lz1 = -Infinity;
+      for (const v of p.vertices) {
+        lx0 = Math.min(lx0, v[0]); lx1 = Math.max(lx1, v[0]);
+        ly0 = Math.min(ly0, v[1]); ly1 = Math.max(ly1, v[1]);
+        lz0 = Math.min(lz0, v[2]); lz1 = Math.max(lz1, v[2]);
+      }
+      extX = (lx1 - lx0) / 2; extY = (ly1 - ly0) / 2; extZ = (lz1 - lz0) / 2;
+    }
+    else if (p.type === 'extrude' && p.polygon) {
+      let lx0 = Infinity, ly0 = Infinity, lx1 = -Infinity, ly1 = -Infinity;
+      for (const v of p.polygon) {
+        lx0 = Math.min(lx0, v[0]); lx1 = Math.max(lx1, v[0]);
+        ly0 = Math.min(ly0, v[1]); ly1 = Math.max(ly1, v[1]);
+      }
+      extX = (lx1 - lx0) / 2; extZ = (ly1 - ly0) / 2; extY = (p.height ?? 1) / 2;
+    }
 
     minX = Math.min(minX, p.position[0] - extX);
     maxX = Math.max(maxX, p.position[0] + extX);
@@ -511,6 +580,11 @@ function normalizeScene(primitives: ParsedPrimitive[]): ParsedPrimitive[] {
         : p.type === 'sphere'
           ? [p.args[0] * scale, p.args[1], p.args[2]]
           : p.args,
+    // Scale vertices / polygon / height for the new primitive types so they
+    // share the same viewport-fit transform as the legacy primitives.
+    vertices: p.vertices?.map(v => [v[0] * scale, v[1] * scale, v[2] * scale] as [number, number, number]),
+    polygon:  p.polygon?.map(v => [v[0] * scale, v[1] * scale] as [number, number]),
+    height:   p.height !== undefined ? p.height * scale : undefined,
     position: [
       (p.position[0] - cx) * scale,
       (p.position[1] - cy) * scale,
@@ -545,6 +619,48 @@ function WiringMermaid({ code }: { code: string }) {
   if (error) return <pre className="text-red-400 text-xs font-mono whitespace-pre-wrap">{code}</pre>;
   return <div ref={containerRef} className="wiring-mermaid-container flex justify-center [&_svg]:max-w-full" dangerouslySetInnerHTML={{ __html: svgHtml }} />;
 }
+
+/**
+ * Geometry primitive renderer. JSX `<boxGeometry/>` etc. can't carry custom
+ * buffer data, so polyhedron (from displacement-mesh) and linear_extrude
+ * (from profile-extrude) build their geometry imperatively via THREE.
+ */
+const PrimitiveGeometry = ({ prim }: { prim: ParsedPrimitive }) => {
+  const geometry = useMemo(() => {
+    if (prim.type === 'polyhedron' && prim.vertices && prim.faces) {
+      // Build a BufferGeometry from raw vertices/faces. Triangulate quads
+      // and higher polygons via fan triangulation (good enough for the
+      // displacement meshes we generate, which are quad grids).
+      const positions: number[] = [];
+      for (const face of prim.faces) {
+        if (face.length < 3) continue;
+        for (let i = 1; i < face.length - 1; i++) {
+          const [a, b, c] = [face[0], face[i], face[i + 1]];
+          for (const idx of [a, b, c]) {
+            const v = prim.vertices[idx];
+            if (v) positions.push(v[0], v[1], v[2]);
+          }
+        }
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+      geo.computeVertexNormals();
+      return geo;
+    }
+    if (prim.type === 'extrude' && prim.polygon && prim.height) {
+      const shape = new THREE.Shape(prim.polygon.map(p => new THREE.Vector2(p[0], p[1])));
+      return new THREE.ExtrudeGeometry(shape, { depth: prim.height, bevelEnabled: false });
+    }
+    return null;
+  }, [prim.type, prim.vertices, prim.faces, prim.polygon, prim.height]);
+
+  // Dispose imperative geometries on unmount so swapping prototypes doesn't
+  // leak GPU memory (long sessions otherwise grow without bound).
+  useEffect(() => () => { geometry?.dispose(); }, [geometry]);
+
+  if (!geometry) return null;
+  return <primitive object={geometry} attach="geometry" />;
+};
 
 const PrototypePreview = ({ openscadCode, parts, selectedPartLabel, onPartClick }: { openscadCode: string; parts: Part[]; selectedPartLabel?: string | null; onPartClick?: (label: string) => void }) => {
   const primitives = useMemo(() => {
@@ -615,6 +731,7 @@ const PrototypePreview = ({ openscadCode, parts, selectedPartLabel, onPartClick 
               {prim.type === 'cube' && <boxGeometry args={prim.args as [number, number, number]} />}
               {prim.type === 'cylinder' && <cylinderGeometry args={prim.args as [number, number, number, number]} />}
               {prim.type === 'sphere' && <sphereGeometry args={prim.args as [number, number, number]} />}
+              {(prim.type === 'polyhedron' || prim.type === 'extrude') && <PrimitiveGeometry prim={prim} />}
               {isHole ? (
                 <meshPhysicalMaterial
                   color="#ff2222"
@@ -645,6 +762,7 @@ const PrototypePreview = ({ openscadCode, parts, selectedPartLabel, onPartClick 
                 {prim.type === 'cube' && <boxGeometry args={prim.args as [number, number, number]} />}
                 {prim.type === 'cylinder' && <cylinderGeometry args={prim.args as [number, number, number, number]} />}
                 {prim.type === 'sphere' && <sphereGeometry args={prim.args as [number, number, number]} />}
+                {(prim.type === 'polyhedron' || prim.type === 'extrude') && <PrimitiveGeometry prim={prim} />}
                 <meshBasicMaterial color={isActive ? '#ffffff' : prim.color} wireframe opacity={isActive ? 0.3 : 0.1} transparent />
               </mesh>
             )}
@@ -3754,6 +3872,13 @@ function ConsultantInterface({
     const msg = messages[msgIdx];
     if (!msg || msg.role !== 'assistant') return;
 
+    // Honour the mute toggle. Previously the prop existed but was ignored —
+    // muted users would still trigger a TTS API call + playback.
+    if (isMuted) {
+      toast.info('Audio is muted — unmute in the advisor footer');
+      return;
+    }
+
     if (msg.isPlaying) {
       cancelSpeech();
       setMessages(prev => prev.map((m, i) => i === msgIdx ? { ...m, isPlaying: false } : m));
@@ -4003,6 +4128,17 @@ function ConsultantInterface({
             </div>
             <span className={`text-[8px] font-bold uppercase tracking-widest ${useDeepThinking ? 'text-laser-accent' : 'text-white/30'}`}>Deep</span>
           </div>
+          {/* TTS mute toggle — gates per-message audio playback */}
+          <button
+            type="button"
+            onClick={onToggleMute}
+            title={isMuted ? 'Audio muted — click to unmute' : 'Audio on — click to mute'}
+            className={`flex items-center justify-center h-5 w-5 rounded transition-colors ${isMuted ? 'text-white/30 hover:text-white/60' : 'text-laser-accent hover:text-laser-accent/80'}`}
+          >
+            {isMuted ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3" />}
+          </button>
+          {/* Voice mic indicator — passive */}
+          {isRecordingVoice && <MicOff className="w-3 h-3 text-red-400/60" aria-hidden />}
           {/* Voice picker — all 30 prebuilt Gemini voices */}
           <select
             value={ttsVoice}

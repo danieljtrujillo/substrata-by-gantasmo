@@ -4,6 +4,16 @@ export interface Env {
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;
   JWT_SECRET: string;
+  /** Server-side Gemini key — NEVER prefix VITE_, NEVER expose to browser. */
+  GEMINI_API_KEY: string;
+  /**
+   * Optional KV namespace for rate-limit counters and PKCE verifiers.
+   * If unbound, rate limiting falls open (allow all) and PKCE storage falls
+   * back to a short-lived cookie. Bind via:
+   *   wrangler kv:namespace create RATE_LIMIT
+   * then add the resulting id to wrangler.toml.
+   */
+  RATE_LIMIT?: KVNamespace;
 }
 
 export interface JWTPayload {

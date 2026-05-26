@@ -20,8 +20,9 @@ jobs:
 
       - run: npm ci
       - run: npm run build
-        env:
-          VITE_GEMINI_API_KEY: ${{ secrets.VITE_GEMINI_API_KEY }}
+        # No VITE_GEMINI_API_KEY here on purpose. Gemini calls go through
+        # /api/ai/relay (Pages Function) which reads GEMINI_API_KEY from
+        # Cloudflare's env binding — never bundled into the browser code.
 
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3

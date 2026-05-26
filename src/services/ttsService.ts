@@ -1,6 +1,28 @@
-import { GoogleGenAI, Modality } from "@google/genai";
+// Modality enum is a const value, so we still import it from the SDK at
+// build time. NO client is instantiated — the TTS request goes through the
+// /api/ai/relay Pages Function so GEMINI_API_KEY stays server-side.
+import { Modality } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
+interface RelayResponse {
+  text?: string;
+  candidates?: any[];
+}
+
+async function relayGenerateContent(req: { model: string; contents: unknown; config?: Record<string, unknown> }): Promise<RelayResponse> {
+  const r = await fetch('/api/ai/relay', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(req),
+  });
+  if (!r.ok) {
+    const detail = await r.json().catch(() => ({}));
+    throw new Error(detail?.message ?? `relay failed (${r.status})`);
+  }
+  return r.json() as Promise<RelayResponse>;
+}
+
+const ai = { models: { generateContent: relayGenerateContent } };
 
 // Centralised model — change once when upgrading.
 // https://ai.google.dev/gemini-api/docs/models

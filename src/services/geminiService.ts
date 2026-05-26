@@ -1,10 +1,55 @@
-import { GoogleGenAI, ThinkingLevel, Type, FunctionDeclaration } from "@google/genai";
+// The @google/genai SDK is imported ONLY for its const enums (Type, Modality,
+// ThinkingLevel) and the FunctionDeclaration type. The actual API client is
+// NEVER instantiated on the browser — all Gemini calls go through
+// /api/ai/relay (server-side, GEMINI_API_KEY stays in Cloudflare env).
+//
+// If you need a feature that depends on SDK methods other than
+// `ai.models.generateContent`, add it to the relay first.
+import { ThinkingLevel, Type, FunctionDeclaration } from "@google/genai";
 import { getComponentDatabaseSummary, getTemplateSummary, DESIGN_PRACTICES, COMMUNITY_SOURCES } from '../designDatabase';
 import { getStyleDirective, get3DStyleDirective, getSketchStyleDirective, type DesignStyle } from '../styleGuides';
 import { getStyleSnippetHeader, getStyleSnippetDirective, withStyleHeader } from '../lib/styleSnippets';
 import { getRegistrySummary, getDfmSummary } from '../engineeringRegistry';
 
-const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
+interface RelayResponse {
+  text?: string;
+  candidates?: any[];
+  functionCalls?: any[];
+}
+
+interface RelayRequest {
+  model: string;
+  contents: unknown;
+  config?: Record<string, unknown>;
+}
+
+/**
+ * Server-side proxy to Gemini. The browser bundle MUST NOT contain an API
+ * key — all calls go through this. Mirrors `ai.models.generateContent`
+ * input shape and a trimmed output shape.
+ */
+async function relayGenerateContent(req: RelayRequest): Promise<RelayResponse> {
+  const r = await fetch('/api/ai/relay', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(req),
+  });
+  if (!r.ok) {
+    // Surface upstream status + message so withRetry can decide; throw an
+    // Error with .status so the retry helper sees it.
+    const detail = await r.json().catch(() => ({}));
+    const err: any = new Error(detail?.message ?? `relay failed (${r.status})`);
+    err.status = detail?.status ?? r.status;
+    throw err;
+  }
+  return r.json() as Promise<RelayResponse>;
+}
+
+// Shape-compatible namespace so the body of each function below can keep its
+// original call style `ai.models.generateContent({...})` without rewriting
+// every callsite. This is a relay client, not the real SDK — no key here.
+const ai = { models: { generateContent: relayGenerateContent } };
 
 // Centralised model registry — single source of truth so model upgrades are
 // a one-line change. See https://ai.google.dev/gemini-api/docs/models

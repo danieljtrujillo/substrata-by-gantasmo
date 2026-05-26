@@ -1,6 +1,7 @@
 // PUT /api/projects/:id — Update project (rename or full update)
 // DELETE /api/projects/:id — Delete project
 import type { Env, AuthenticatedData } from '../../types';
+import { ProjectUpdateSchema, exceedsSize, validationErrorResponse } from './schema';
 
 export const onRequestPut: PagesFunction<Env, string, AuthenticatedData> = async (context) => {
   const userId = context.data.user.sub;
@@ -18,10 +19,23 @@ export const onRequestPut: PagesFunction<Env, string, AuthenticatedData> = async
     return Response.json({ error: 'Not your project' }, { status: 403 });
   }
 
-  const body = await context.request.json() as Record<string, unknown>;
+  let rawBody: unknown;
+  try {
+    rawBody = await context.request.json();
+  } catch {
+    return Response.json({ error: 'invalid_json' }, { status: 400 });
+  }
+  if (exceedsSize(rawBody)) {
+    return Response.json({ error: 'payload_too_large' }, { status: 413 });
+  }
+  const parsed = ProjectUpdateSchema.safeParse(rawBody);
+  if (!parsed.success) return validationErrorResponse(parsed.error);
+  const body = parsed.data;
+
   const now = new Date().toISOString();
 
-  // Support partial updates (rename only sends name)
+  // Partial-update path: only emit SET fragments for fields the client sent.
+  // Server-side timestamps are always overwritten — client values are ignored.
   const updates: string[] = ['updated_at = ?'];
   const values: unknown[] = [now];
 

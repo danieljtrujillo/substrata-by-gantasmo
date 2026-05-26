@@ -687,15 +687,32 @@ npm run dev:full
 ### Environment Variables
 
 ```env
-VITE_GEMINI_API_KEY=your_gemini_api_key
+# Optional public bundle var — only the Smithsonian adapter needs one.
+VITE_SMITHSONIAN_API_KEY=optional_smithsonian_key
 ```
+
+> The Gemini API key is **never** in the browser bundle. All AI calls go
+> through `/api/ai/relay` (Cloudflare Pages Function) which reads
+> `GEMINI_API_KEY` from the server-side env binding. Set it as a
+> Cloudflare secret, not as a `VITE_*` var.
 
 ### Cloudflare Secrets (set via dashboard or `wrangler pages secret put`)
 
 ```
+GEMINI_API_KEY=your_gemini_api_key                       # server-side only
 GOOGLE_CLIENT_ID=your_google_oauth_client_id
 GOOGLE_CLIENT_SECRET=your_google_oauth_client_secret
 JWT_SECRET=a_random_secret_string_for_signing_session_tokens
+```
+
+### Optional: KV namespace for PKCE + rate limiting
+
+```bash
+npx wrangler kv namespace create RATE_LIMIT
+# Copy the returned id, uncomment the [[kv_namespaces]] block in
+# wrangler.toml, and paste the id. With KV unbound the rate limiter falls
+# open and PKCE falls back to an HttpOnly cookie — fine for dev, tighten
+# for production.
 ```
 
 ### Commands
