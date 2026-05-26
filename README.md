@@ -754,6 +754,37 @@ npx wrangler kv namespace create RATE_LIMIT
 # for production.
 ```
 
+### Optional: Modal CAD worker (CadQuery + Text2CAD engines)
+
+The new CAD engine selector in the prototyping header offers three engines:
+**OpenSCAD** (browser-local, default), **CadQuery** (robust BRep via Modal),
+and **Text2CAD** (research model on a GPU function). OpenSCAD works out of the
+box. CadQuery and Text2CAD need the Python worker in [worker/](worker/) deployed
+to [Modal](https://modal.com).
+
+Quick deploy:
+
+```bash
+pip install modal
+modal token new
+modal secret create substrata-cad-worker \
+  WORKER_TOKEN=$(openssl rand -hex 24) \
+  GEMINI_API_KEY=...
+modal deploy worker/modal_app.py
+```
+
+Modal prints the deployed URL. Wire it into Pages:
+
+```
+CAD_WORKER_URL=https://your-account--substrata-cad-web.modal.run
+CAD_WORKER_SECRET=<the WORKER_TOKEN you generated above>
+```
+
+With both set, `/api/cad/generate` forwards to Modal. Without them, the
+CadQuery and Text2CAD options return 503 `worker_not_configured` and only
+OpenSCAD is usable. Full setup (including the Text2CAD checkpoint volume) is
+documented in [worker/README.md](worker/README.md).
+
 ### Commands
 
 | Command | Description |
@@ -860,6 +891,8 @@ public/docs/screenshots/         # App screenshots for documentation
 - **JWT claims**: `iss=substrata-by-gantasmo`, `aud=substrata-web`, `iat`, `nbf`, `exp`, validated with 60s leeway
 - **Rate limiting**: KV-backed sliding-window limiter caps `/api/auth/callback` at 20 req/min per IP, `/api/ai/relay` at 30 req/h anonymous and 300 req/h per authenticated user. Fails open if the `RATE_LIMIT` KV binding is absent
 - **Request validation**: Zod schemas in [functions/api/projects/schema.ts](functions/api/projects/schema.ts) enforce shape on `laserSettings` and `procOptions`, reject unknown fields, and cap each project row at 2 MiB
+- **CAD worker auth**: When the optional Modal worker is wired up, `/api/cad/generate` injects `X-Substrata-Worker-Token` from the `CAD_WORKER_SECRET` Pages env binding. The worker rejects any request without the matching token. The token never enters the browser bundle. CAD generation is rate-limited at 10 req/h anonymous and 60 req/h per authenticated user
+- **CAD safety on the worker**: Gemini emits a Pydantic-validated CAD IR; the transpiler walks that IR and calls CadQuery directly. The worker never `exec()`s model-generated Python
 - See [security_spec.md](security_spec.md) for detailed security analysis
 
 ---

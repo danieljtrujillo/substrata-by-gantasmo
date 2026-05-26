@@ -12,3 +12,4 @@ firebase-applet-config.json
 repomix-output.md
 .wrangler/
 .playwright-mcp/
+.claude/

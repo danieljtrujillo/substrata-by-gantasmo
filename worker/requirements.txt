@@ -1,0 +1,23 @@
+# Worker dependencies. Modal builds two images from worker/modal_app.py
+# (cadquery_image, text2cad_image) — this file mirrors the union so the
+# worker can also be run locally for development with `pip install -r
+# worker/requirements.txt`.
+
+# Core
+modal>=0.65
+fastapi[standard]>=0.115
+pydantic>=2.6
+google-genai>=1.0
+
+# CadQuery engine
+cadquery>=2.4
+trimesh>=4.0
+
+# Text2CAD engine (heavy; only needed if running text2cad inference locally)
+# Comment out for a lean CadQuery-only dev setup.
+# torch==2.2.1
+# transformers>=4.41
+# open3d>=0.18
+# pythonocc-core==7.7.2
+# pyvista>=0.43
+# huggingface_hub>=0.23

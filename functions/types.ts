@@ -19,6 +19,19 @@ export interface Env {
    * then add the resulting id to wrangler.toml.
    */
   RATE_LIMIT?: KVNamespace;
+  /**
+   * Base URL of the Modal-hosted Python CAD worker (e.g.
+   * https://<modal-account>--substrata-cad-app.modal.run). When unset, the
+   * /api/cad/generate route returns 503 worker_not_configured for any engine
+   * other than openscad (which runs entirely in the browser).
+   */
+  CAD_WORKER_URL?: string;
+  /**
+   * Shared secret sent to the CAD worker as the `X-Substrata-Worker-Token`
+   * header. The worker rejects any request missing or mismatching this token.
+   * Required whenever CAD_WORKER_URL is set.
+   */
+  CAD_WORKER_SECRET?: string;
 }
 
 export interface JWTPayload {

@@ -118,6 +118,8 @@ billing. Those expansions will require additional rules.
 | `GOOGLE_CLIENT_ID`         | Cloudflare Pages env binding                | `context.env.GOOGLE_CLIENT_ID` |
 | `GOOGLE_CLIENT_SECRET`     | Cloudflare Pages env binding (secret)       | `context.env.GOOGLE_CLIENT_SECRET` |
 | `JWT_SECRET`               | Cloudflare Pages env binding (secret)       | `context.env.JWT_SECRET`       |
+| `CAD_WORKER_URL`           | Cloudflare Pages env binding                | `context.env.CAD_WORKER_URL` — base URL of the Modal CAD worker. Read only by [functions/api/cad/generate.ts](functions/api/cad/generate.ts). Optional. |
+| `CAD_WORKER_SECRET`        | Cloudflare Pages env binding (secret)       | `context.env.CAD_WORKER_SECRET` — shared bearer token sent as `X-Substrata-Worker-Token`. Worker rejects any mismatch. |
 
 No `VITE_*` secrets ship in the bundle. Every key is read server-side by a Pages Function.
 
@@ -144,6 +146,32 @@ for asset downloads. The fetch route enforces a Smithsonian-host whitelist
 `siris-archives.si.edu`, `siris-libraries.si.edu`, `edan.si.edu`, `www.si.edu`)
 and a 64 MiB per-asset cap so the proxy cannot be repurposed as an open
 relay. Both endpoints are rate-limited (60 searches/min, 30 fetches/min per IP).
+
+### CAD worker proxy (Modal)
+
+The optional Modal-hosted CAD worker handles the CadQuery + Text2CAD engines.
+[functions/api/cad/generate.ts](functions/api/cad/generate.ts) is the only
+sanctioned caller; it adds `X-Substrata-Worker-Token` (read from
+`CAD_WORKER_SECRET`) to every forwarded request. The worker rejects any
+request without the matching token. The browser never sees the worker URL
+beyond the relative `/api/cad/generate` path, and never sees the token.
+
+The worker's `GEMINI_API_KEY` is its own Modal secret, separate from the
+Cloudflare Pages binding. Both can hold the same key value, but they are
+deployed and rotated independently so compromise of one does not unlock the
+other. The worker does NOT receive any client-side key.
+
+The CAD generation flow never `exec()`s model output. Gemini emits a JSON
+CAD IR, validated by Pydantic on the worker, then walked by a hand-written
+transpiler that calls CadQuery methods directly. The LLM cannot inject
+Python into the worker process.
+
+Artifact downloads served by the worker at `/artifacts/{job}/{file}` are
+guarded against path traversal: both `job` and `file` are restricted to
+`[A-Za-z0-9_.-]` and must round-trip the sanitiser unchanged.
+
+Quotas: 10 CAD generations/hour anonymous, 60/hour per authenticated user,
+enforced upstream by the Pages proxy before the Modal worker is reached.
 
 ## 8. XSS
 

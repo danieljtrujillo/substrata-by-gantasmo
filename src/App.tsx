@@ -131,6 +131,7 @@ import {
   generateParametricVariant,
   type SketchMode
 } from './services/geminiService';
+import { generateCad } from './services/cadEngineService';
 import { LibraryPanel as AssetLibraryPanel, HackerPanel, ArchitecturePanel } from './components/StudioModePanels';
 import type { BuildingDescriptor } from './lib/buildingCodeRules';
 import type { ElectricalPlan } from './lib/electricalPlan';
@@ -142,6 +143,7 @@ import { STYLE_GUIDES } from './styleGuides';
 import { loginWithGoogle, logout, AUTH_AVAILABLE } from './lib/auth';
 import { AdvancedEditor } from './components/AdvancedEditor';
 import { DocumentationViewer } from './components/DocumentationViewer';
+import { CadMeshViewer } from './components/CadMeshViewer';
 import { saveProject, getProjects, deleteProject, renameProject, LaserProject } from './services/projectService';
 
 // ── SVG Sanitizer ──────────────────────────────────────────────
@@ -662,7 +664,15 @@ const PrimitiveGeometry = ({ prim }: { prim: ParsedPrimitive }) => {
   return <primitive object={geometry} attach="geometry" />;
 };
 
-const PrototypePreview = ({ openscadCode, parts, selectedPartLabel, onPartClick }: { openscadCode: string; parts: Part[]; selectedPartLabel?: string | null; onPartClick?: (label: string) => void }) => {
+const PrototypePreview = ({ openscadCode, parts, selectedPartLabel, onPartClick, cadArtifacts }: { openscadCode: string; parts: Part[]; selectedPartLabel?: string | null; onPartClick?: (label: string) => void; cadArtifacts?: CadArtifactRef[] }) => {
+  const meshArtifact = useMemo(() => {
+    if (!cadArtifacts || cadArtifacts.length === 0) return null;
+    return (
+      cadArtifacts.find(a => a.kind === 'glb' && a.url)
+      ?? cadArtifacts.find(a => a.kind === 'stl' && a.url)
+      ?? null
+    );
+  }, [cadArtifacts]);
   const primitives = useMemo(() => {
     const parsed = parseOpenSCAD(openscadCode);
     if (parsed.length > 0) return parsed;
@@ -705,6 +715,17 @@ const PrototypePreview = ({ openscadCode, parts, selectedPartLabel, onPartClick 
       if (idx >= 0) setSelected(idx);
     }
   }, [selectedPartLabel, primitives]);
+
+  if (meshArtifact) {
+    return (
+      <group>
+        <Suspense fallback={null}>
+          <CadMeshViewer artifacts={cadArtifacts ?? []} />
+        </Suspense>
+        <ContactShadows position={[0, -0.01, 0]} opacity={0.4} scale={20} blur={2} far={6} />
+      </group>
+    );
+  }
 
   return (
     <group>
@@ -814,6 +835,12 @@ interface Part {
   fabrication?: string;
 }
 
+interface CadArtifactRef {
+  kind: 'step' | 'stl' | 'glb' | 'obj' | 'openscad' | 'cadquery_py' | 'source';
+  url?: string;
+  bytes?: number;
+}
+
 interface PrototypeProject {
   id: string;
   name: string;
@@ -828,6 +855,9 @@ interface PrototypeProject {
   printingFiles: string[];
   communityRefs: string[];
   status: 'ideation' | 'generating' | 'ready';
+  cadEngine?: 'openscad' | 'cadquery' | 'text2cad';
+  cadArtifacts?: CadArtifactRef[];
+  cadSourceCode?: string;
 }
 
 const GENERATION_STAGES = [
@@ -856,6 +886,14 @@ export default function App() {
 
   // Studio sub-mode within prototype: maker (default) | architecture (buildings + IBC/ADA/NEC) | hacker (PCB schematics)
   type StudioMode = 'maker' | 'architecture' | 'hacker';
+  type CadEngineId = 'openscad' | 'cadquery' | 'text2cad';
+  const [cadEngine, setCadEngine] = useState<CadEngineId>(() => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('substrata.cadEngine') : null;
+    return (saved === 'cadquery' || saved === 'text2cad') ? saved : 'openscad';
+  });
+  useEffect(() => {
+    if (typeof window !== 'undefined') localStorage.setItem('substrata.cadEngine', cadEngine);
+  }, [cadEngine]);
   const [studioMode, setStudioMode] = useState<StudioMode>(() => {
     const saved = typeof window !== 'undefined' ? localStorage.getItem('substrata.studioMode') : null;
     return (saved === 'architecture' || saved === 'hacker') ? saved : 'maker';
@@ -1925,7 +1963,9 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
         ? `${activePrompt}\n\n[User's existing component inventory: ${registrySummary}]`
         : activePrompt;
       // Mode-dispatch: architecture uses architectural blueprint generator (buildings + IBC/ADA/NEC).
-      // Hacker mode uses the regular blueprint and surfaces the PCB panel for schematic work.
+      // Hacker / Maker route through cadEngineService so the user can swap engines (OpenSCAD / CadQuery / Text2CAD).
+      let workerArtifacts: CadArtifactRef[] | undefined;
+      let workerSource: string | undefined;
       const data: any = studioMode === 'architecture'
         ? await (async () => {
             const arch = await generateArchitecturalBlueprint(enrichedPrompt, 'residential', 'metric', '', referenceImage || undefined);
@@ -1963,7 +2003,52 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
               communityRefs: arch.communityRefs || [],
             };
           })()
-        : await generateProjectBlueprint(enrichedPrompt, designStyle, selectedPrinter, '', referenceImage || undefined);
+        : await (async () => {
+            const cadResult = await generateCad({
+              prompt: enrichedPrompt,
+              engine: cadEngine,
+              mode: studioMode,
+              units: 'mm',
+              designStyle,
+              printer: selectedPrinter,
+              referenceImage: referenceImage || undefined,
+            });
+            if (!cadResult.ok) {
+              const first = cadResult.validation[0];
+              throw new Error(first?.message ?? 'CAD generation failed');
+            }
+            workerArtifacts = cadResult.artifacts as CadArtifactRef[];
+            workerSource = cadResult.sourceCode;
+            if (cadEngine === 'openscad') {
+              const companion = (cadResult.extras?.companion ?? {}) as any;
+              return {
+                name: companion.name,
+                description: companion.description,
+                designNotes: companion.designNotes ?? '',
+                parts: companion.parts ?? [],
+                openscadCode: cadResult.sourceCode ?? companion.openscadCode ?? '',
+                svgDesign: companion.svgDesign ?? '',
+                wiringDiagram: companion.wiringDiagram ?? '',
+                assemblySteps: companion.assemblySteps ?? [],
+                code: companion.code ?? '',
+                printingFiles: companion.printingFiles ?? [],
+                communityRefs: companion.communityRefs ?? [],
+              };
+            }
+            return {
+              name: `${cadEngine === 'cadquery' ? 'CadQuery' : 'Text2CAD'} part`,
+              description: enrichedPrompt,
+              designNotes: cadResult.logs.join('\n'),
+              parts: [],
+              openscadCode: '// This engine emits BRep, not OpenSCAD. See the CAD source tab and download STEP/STL/GLB.',
+              svgDesign: '',
+              wiringDiagram: 'Electronics not generated by this engine. Switch to OpenSCAD for a full companion blueprint.',
+              assemblySteps: [],
+              code: '',
+              printingFiles: [],
+              communityRefs: [],
+            };
+          })();
 
       setProtoGenerationProgress(90);
       setGenerationStage(GENERATION_STAGES[GENERATION_STAGES.length - 1]);
@@ -1981,7 +2066,10 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
         code: data.code,
         printingFiles: data.printingFiles || [],
         communityRefs: data.communityRefs || [],
-        status: 'ready'
+        status: 'ready',
+        cadEngine: studioMode === 'architecture' ? 'openscad' : cadEngine,
+        cadArtifacts: workerArtifacts,
+        cadSourceCode: workerSource,
       };
 
       setProtoProject(newProject);
@@ -2638,6 +2726,20 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
             </div>
           )}
 
+          {/* CAD engine selector — only when studio mode allows remote CAD (maker / hacker) */}
+          {engineeringMode === 'prototype' && studioMode !== 'architecture' && (
+            <select
+              value={cadEngine}
+              onChange={(e) => setCadEngine(e.target.value as CadEngineId)}
+              title="CAD engine. OpenSCAD runs in the browser. CadQuery and Text2CAD need the Modal worker (CAD_WORKER_URL set in Pages env)."
+              className="hidden md:inline-flex bg-black/40 border border-white/10 text-[9px] font-bold uppercase tracking-wider text-white/60 rounded-md px-1.5 py-0.5 outline-none focus:border-blue-500/50"
+            >
+              <option value="openscad">OpenSCAD</option>
+              <option value="cadquery">CadQuery</option>
+              <option value="text2cad">Text2CAD</option>
+            </select>
+          )}
+
           {/* Design style — hidden on mobile */}
           <div className="hidden md:flex gap-0.5 ml-2">
             {(['minimalist', 'deconstructivist', 'classical', 'organic'] as const).map(s => (
@@ -2923,7 +3025,7 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
                   <OrbitControls makeDefault minPolarAngle={0} maxPolarAngle={Math.PI / 1.75} />
                   <Suspense fallback={null}>
                     <Stage environment="city" intensity={0.5}>
-                      <PrototypePreview openscadCode={protoProject?.openscadCode || ''} parts={protoProject?.parts || []} selectedPartLabel={selectedPartLabel} onPartClick={(label) => setSelectedPartLabel(label)} />
+                      <PrototypePreview openscadCode={protoProject?.openscadCode || ''} parts={protoProject?.parts || []} selectedPartLabel={selectedPartLabel} onPartClick={(label) => setSelectedPartLabel(label)} cadArtifacts={protoProject?.cadArtifacts} />
                     </Stage>
                     <Environment preset="city" />
                   </Suspense>
@@ -3183,6 +3285,19 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
 
               {activeOutputTab === 'fabrication' && (
                 <div className="h-full flex flex-col">
+                  {protoProject?.cadArtifacts && protoProject.cadArtifacts.some(a => a.url) && (
+                    <div className="px-3 py-2 border-b border-white/5 bg-emerald-500/5 flex flex-wrap items-center gap-2">
+                      <span className="text-[9px] font-bold uppercase tracking-widest text-emerald-300/80">
+                        {protoProject.cadEngine === 'cadquery' ? 'CadQuery artifacts' : protoProject.cadEngine === 'text2cad' ? 'Text2CAD artifacts' : 'CAD artifacts'}
+                      </span>
+                      {protoProject.cadArtifacts.filter(a => a.url).map((a, i) => (
+                        <a key={i} href={a.url} target="_blank" rel="noopener noreferrer"
+                          className="text-[9px] font-mono font-bold uppercase tracking-wider text-emerald-300 hover:text-emerald-200 border border-emerald-500/30 rounded px-1.5 py-0.5 hover:bg-emerald-500/10 transition-colors"
+                          title={a.bytes ? `${a.bytes} bytes` : undefined}
+                        >{a.kind}</a>
+                      ))}
+                    </div>
+                  )}
                   <div className="px-3 py-1.5 flex gap-1.5 border-b border-white/5">
                     <Button size="sm" variant={activeDesignFileTab === 'openscad' ? 'default' : 'ghost'} className={`h-6 text-[8px] uppercase tracking-widest font-bold ${activeDesignFileTab === 'openscad' ? 'bg-blue-600 text-white' : 'text-white/40'}`}
                       onClick={() => setActiveDesignFileTab('openscad')}><Box className="w-3 h-3 mr-1" /> OpenSCAD</Button>
@@ -3208,7 +3323,9 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
                   {designFileViewMode === 'code' ? (
                     <div className="flex-1 overflow-auto">
                       {activeDesignFileTab === 'openscad' && (() => {
-                        const code = protoProject?.openscadCode || '// Generate a blueprint to see OpenSCAD code';
+                        const code = (protoProject?.cadEngine && protoProject.cadEngine !== 'openscad' && protoProject.cadSourceCode)
+                          ? protoProject.cadSourceCode
+                          : (protoProject?.openscadCode || '// Generate a blueprint to see OpenSCAD code');
                         // Split code into module blocks for click-to-select
                         const moduleRegex = /module\s+(\w+)\s*\([^)]*\)\s*\{/g;
                         const segments: { text: string; label: string | null }[] = [];

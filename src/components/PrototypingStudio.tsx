@@ -49,6 +49,8 @@ import { OrbitControls, Stage, PerspectiveCamera, Environment, Grid } from '@rea
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import { generateProjectBlueprint, generateArchitecturalBlueprint } from '../services/geminiService';
+import { generateCad, listAvailableEngines } from '../services/cadEngineService';
+import type { CadEngineId } from '../services/cadEngineService';
 import { DESIGN_TEMPLATES } from '../designDatabase';
 import { LibraryPanel, HackerPanel, ArchitecturePanel } from './StudioModePanels';
 import { Library } from 'lucide-react';
@@ -90,6 +92,12 @@ interface Part {
   fabrication?: string;
 }
 
+interface CadGeneratedArtifact {
+  kind: 'step' | 'stl' | 'glb' | 'obj' | 'openscad' | 'cadquery_py' | 'source';
+  url?: string;
+  bytes?: number;
+}
+
 interface PrototypeProject {
   id: string;
   name: string;
@@ -104,6 +112,10 @@ interface PrototypeProject {
   printingFiles: string[];
   communityRefs: string[];
   status: 'ideation' | 'generating' | 'ready';
+  cadEngine?: CadEngineId;
+  cadArtifacts?: CadGeneratedArtifact[];
+  cadSourceCode?: string;
+  cadSourceLanguage?: 'openscad' | 'python';
 }
 
 export const PrototypingStudio = ({ designStyle = 'minimalist', advisorContext = '', autoPrompt = '' }: { designStyle?: string; advisorContext?: string; autoPrompt?: string }) => {
@@ -139,6 +151,19 @@ export const PrototypingStudio = ({ designStyle = 'minimalist', advisorContext =
   useEffect(() => {
     if (typeof window !== 'undefined') localStorage.setItem('substrata.studioMode', studioMode);
   }, [studioMode]);
+
+  // ── CAD engine selector (maker/hacker modes only) ──────────────────────────
+  // OpenSCAD is browser-local and ships the full companion blueprint (SVG,
+  // wiring, firmware). CadQuery + Text2CAD live on the Modal worker and
+  // produce only CAD artifacts (STEP/STL/GLB).
+  const [cadEngine, setCadEngine] = useState<CadEngineId>(() => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('substrata.cadEngine') : null;
+    return (saved === 'cadquery' || saved === 'text2cad') ? saved : 'openscad';
+  });
+  useEffect(() => {
+    if (typeof window !== 'undefined') localStorage.setItem('substrata.cadEngine', cadEngine);
+  }, [cadEngine]);
+  const availableEngines = React.useMemo(() => listAvailableEngines(), []);
 
   // ── Mode-specific panel visibility ─────────────────────────────────────────
   const [showLibrary, setShowLibrary] = useState(false);
@@ -259,24 +284,65 @@ export const PrototypingStudio = ({ designStyle = 'minimalist', advisorContext =
         };
         setShowArchPanel(true);
       } else {
-        const data = await generateProjectBlueprint(activePrompt, designStyle, selectedPrinter, advisorContext);
+        const result = await generateCad({
+          prompt: activePrompt,
+          engine: cadEngine,
+          mode: studioMode,
+          units: 'mm',
+          designStyle,
+          printer: selectedPrinter,
+          advisorContext,
+        });
         clearInterval(progressInterval);
         setGenerationProgress(90);
-        newProject = {
-          id: `proto_${Date.now()}`,
-          name: data.name,
-          description: data.description,
-          designNotes: data.designNotes || '',
-          parts: (data.parts || []).map((p: any) => ({ ...p, id: p.id || Math.random().toString(36).substr(2, 9) })),
-          openscadCode: data.openscadCode || '// No custom 3D parts generated',
-          svgDesign: data.svgDesign || '',
-          wiringDiagram: data.wiringDiagram || 'No electronics in this design',
-          assemblySteps: data.assemblySteps || [],
-          code: data.code,
-          printingFiles: data.printingFiles || [],
-          communityRefs: data.communityRefs || [],
-          status: 'ready'
-        };
+
+        if (!result.ok) {
+          const first = result.validation[0];
+          throw new Error(first?.message ?? 'CAD generation failed');
+        }
+
+        if (cadEngine === 'openscad') {
+          const companion = (result.extras?.companion ?? {}) as any;
+          newProject = {
+            id: `proto_${Date.now()}`,
+            name: companion.name || 'Untitled prototype',
+            description: companion.description || '',
+            designNotes: companion.designNotes || '',
+            parts: (companion.parts || []).map((p: any) => ({ ...p, id: p.id || Math.random().toString(36).substr(2, 9) })),
+            openscadCode: result.sourceCode || companion.openscadCode || '// No custom 3D parts generated',
+            svgDesign: companion.svgDesign || '',
+            wiringDiagram: companion.wiringDiagram || 'No electronics in this design',
+            assemblySteps: companion.assemblySteps || [],
+            code: companion.code || '',
+            printingFiles: companion.printingFiles || [],
+            communityRefs: companion.communityRefs || [],
+            status: 'ready',
+            cadEngine: 'openscad',
+            cadArtifacts: result.artifacts,
+            cadSourceCode: result.sourceCode,
+            cadSourceLanguage: 'openscad',
+          };
+        } else {
+          newProject = {
+            id: `proto_${Date.now()}`,
+            name: `${cadEngine === 'cadquery' ? 'CadQuery' : 'Text2CAD'} part`,
+            description: activePrompt,
+            designNotes: result.logs.join('\n'),
+            parts: [],
+            openscadCode: '// This engine emits BRep, not OpenSCAD. See the CAD source tab.',
+            svgDesign: '',
+            wiringDiagram: 'Electronics not generated by this engine. Switch to OpenSCAD for a full companion blueprint.',
+            assemblySteps: [],
+            code: '',
+            printingFiles: [],
+            communityRefs: [],
+            status: 'ready',
+            cadEngine,
+            cadArtifacts: result.artifacts,
+            cadSourceCode: result.sourceCode,
+            cadSourceLanguage: cadEngine === 'cadquery' ? 'python' : 'openscad',
+          };
+        }
         if (studioMode === 'hacker') setShowHackerPanel(true);
       }
 
@@ -333,6 +399,28 @@ export const PrototypingStudio = ({ designStyle = 'minimalist', advisorContext =
               );
             })}
           </div>
+          {studioMode !== 'architecture' && (
+            <>
+              <Separator orientation="vertical" className="h-4 bg-white/10" />
+              <div className="flex flex-col items-end">
+                <select
+                  className="bg-black/40 border border-white/10 text-xs text-white/60 rounded px-2 py-1 outline-none focus:border-blue-500/50"
+                  value={cadEngine}
+                  onChange={(e) => setCadEngine(e.target.value as CadEngineId)}
+                  title="CAD engine — OpenSCAD is browser-local; CadQuery and Text2CAD require the Modal worker"
+                >
+                  {availableEngines.map(en => (
+                    <option key={en.id} value={en.id}>{en.displayName}</option>
+                  ))}
+                </select>
+                {cadEngine !== 'openscad' && (
+                  <span className="text-[9px] text-amber-400/70 font-mono mt-0.5">
+                    {cadEngine === 'text2cad' ? 'GPU warm-up on first call' : 'Worker required'}
+                  </span>
+                )}
+              </div>
+            </>
+          )}
           <Separator orientation="vertical" className="h-4 bg-white/10" />
           <Badge variant="outline" className="bg-white/5 text-blue-300 border-blue-500/30">
             <Zap className="w-3 h-3 mr-1" /> ACTIVE ENGINE
@@ -858,12 +946,37 @@ export const PrototypingStudio = ({ designStyle = 'minimalist', advisorContext =
                         <div className="px-4 py-2 bg-blue-500/5 border-b border-white/5 flex items-center justify-between">
                           <div className="flex items-center gap-2">
                             <Box className="w-3.5 h-3.5 text-blue-400" />
-                            <span className="text-[10px] text-blue-300 font-mono">3D Printable Parts — OpenSCAD Code</span>
+                            <span className="text-[10px] text-blue-300 font-mono">
+                              {currentProject?.cadEngine === 'cadquery' ? 'CadQuery Source (Python)'
+                                : currentProject?.cadEngine === 'text2cad' ? 'Text2CAD Output'
+                                : '3D Printable Parts — OpenSCAD Code'}
+                            </span>
                           </div>
-                          <span className="text-[9px] text-white/30">Paste into OpenSCAD to generate STL files</span>
+                          <span className="text-[9px] text-white/30">
+                            {currentProject?.cadEngine === 'cadquery' ? 'Worker exported STEP/STL/GLB below'
+                              : currentProject?.cadEngine === 'text2cad' ? 'Sequential CAD model (single part)'
+                              : 'Paste into OpenSCAD to generate STL files'}
+                          </span>
                         </div>
+                        {currentProject?.cadArtifacts && currentProject.cadArtifacts.some(a => a.url) && (
+                          <div className="px-4 py-2 bg-emerald-500/5 border-b border-white/5 flex flex-wrap items-center gap-2">
+                            <span className="text-[10px] text-emerald-300/80 font-mono uppercase tracking-wider">Artifacts</span>
+                            {currentProject.cadArtifacts.filter(a => a.url).map((a, i) => (
+                              <a
+                                key={i}
+                                href={a.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[10px] font-mono text-emerald-300 hover:text-emerald-200 border border-emerald-500/30 rounded px-2 py-0.5 hover:bg-emerald-500/10 transition-colors"
+                                title={a.bytes ? `${a.bytes} bytes` : undefined}
+                              >
+                                {a.kind.toUpperCase()}
+                              </a>
+                            ))}
+                          </div>
+                        )}
                         <pre className="flex-1 p-4 text-blue-300 font-mono text-xs overflow-auto whitespace-pre-wrap">
-                          {currentProject?.openscadCode || '// Generate a blueprint to see OpenSCAD code for custom 3D parts\n// Each part will be a separate module you can render to STL'}
+                          {currentProject?.cadSourceCode || currentProject?.openscadCode || '// Generate a blueprint to see source for custom 3D parts'}
                         </pre>
                       </>
                     )}
