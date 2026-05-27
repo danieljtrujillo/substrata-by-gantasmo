@@ -10,8 +10,12 @@ import { getComponentDatabaseSummary, getTemplateSummary, DESIGN_PRACTICES, COMM
 import { getStyleDirective, get3DStyleDirective, getSketchStyleDirective, type DesignStyle } from '../styleGuides';
 import { getStyleSnippetHeader, getStyleSnippetDirective, withStyleHeader } from '../lib/styleSnippets';
 import { getRegistrySummary, getDfmSummary } from '../engineeringRegistry';
-import { buildConstraintBlock } from '../lib/designConstraints';
+import { buildConstraintBlock, extractNegativeConstraints } from '../lib/designConstraints';
 import { getArchitecturalSnippetHeader, getArchitecturalSnippetDirective } from '../lib/architecturalSnippets';
+import {
+  validateCompliance, violationsOf, buildRegenCorrectionBlock, summariseFindings,
+  type ValidationTarget,
+} from '../lib/complianceValidator';
 
 interface RelayResponse {
   text?: string;
@@ -658,11 +662,11 @@ Use the Engineering Parts Registry above for every standard component (NEMA17, 6
 ALWAYS include an assembly() module that shows how ALL parts fit together with translate/rotate positioning.
 `;
 
-  const contextSection = advisorContext 
-    ? `\n\nCONTEXT FROM DESIGN ADVISOR SESSION:\n${advisorContext}\n` 
+  const contextSection = advisorContext
+    ? `\n\nCONTEXT FROM DESIGN ADVISOR SESSION:\n${advisorContext}\n`
     : '';
 
-  const textContent = `${systemPrompt}
+  const buildTextContent = (correction: string) => `${correction ? correction + '\n\n' : ''}${systemPrompt}
 
 PROJECT REQUEST: ${prompt}
 ${contextSection}
@@ -682,16 +686,19 @@ ${getStyleSnippetHeader(designStyle as DesignStyle)}
 
 Return exactly as JSON.`;
 
-  const contentParts: any[] = [];
-  if (referenceImage) {
-    contentParts.push({ inlineData: { data: dataUrlToB64(referenceImage), mimeType: 'image/png' } });
-    contentParts.push({ text: 'REFERENCE IMAGE: Use this as a visual guide for proportions, form factor, and overall shape. The design should closely match the reference.\n\n' });
-  }
-  contentParts.push({ text: textContent });
+  const buildContentParts = (correction: string) => {
+    const parts: any[] = [];
+    if (referenceImage) {
+      parts.push({ inlineData: { data: dataUrlToB64(referenceImage), mimeType: 'image/png' } });
+      parts.push({ text: 'REFERENCE IMAGE: Use this as a visual guide for proportions, form factor, and overall shape. The design should closely match the reference.\n\n' });
+    }
+    parts.push({ text: buildTextContent(correction) });
+    return parts;
+  };
 
-  const response = await withRetry(() => ai.models.generateContent({
+  const runGenerate = (correction: string) => withRetry(() => ai.models.generateContent({
     model: MODELS.pro,
-    contents: { parts: contentParts },
+    contents: { parts: buildContentParts(correction) },
     config: {
       responseMimeType: "application/json",
       responseSchema: {
@@ -742,7 +749,35 @@ Return exactly as JSON.`;
     }
   }));
 
-  const result = JSON.parse(getResponseText(response));
+  // ── Compliance loop ───────────────────────────────────────────
+  // Run once, validate against extracted user constraints, regen once on
+  // violation. Cap at 1 retry — a second regen rarely helps and burns
+  // tokens. Final state (pass / remaining violations) is appended to
+  // designNotes so the user can see what was/wasn't honoured.
+  const constraintSet = extractNegativeConstraints(prompt);
+
+  let response = await runGenerate('');
+  let result = JSON.parse(getResponseText(response));
+  let findings = validateCompliance(constraintSet, {
+    openscadCode: result.openscadCode,
+    designNotes: result.designNotes,
+    materialSchedule: undefined,
+    wiringDiagram: result.wiringDiagram,
+    extra: [result.description ?? '', ...(result.assemblySteps ?? [])],
+  } satisfies ValidationTarget);
+
+  if (violationsOf(findings).length > 0) {
+    const correction = buildRegenCorrectionBlock(findings);
+    response = await runGenerate(correction);
+    result = JSON.parse(getResponseText(response));
+    findings = validateCompliance(constraintSet, {
+      openscadCode: result.openscadCode,
+      designNotes: result.designNotes,
+      materialSchedule: undefined,
+      wiringDiagram: result.wiringDiagram,
+      extra: [result.description ?? '', ...(result.assemblySteps ?? [])],
+    });
+  }
 
   // Validate and log warnings for the generated OpenSCAD code
   if (result.openscadCode) {
@@ -754,6 +789,8 @@ Return exactly as JSON.`;
         '\n\n⚠️ 3D Model Notes: ' + warnings.join('. ') + '.';
     }
   }
+
+  result.designNotes = (result.designNotes ?? '') + '\n\n' + summariseFindings(findings);
 
   return result;
 }
@@ -1345,17 +1382,20 @@ Use NEC 2026 defaults: bathrooms/kitchens/outdoor → gfci_outlet; bedrooms → 
 
 ${advisorContext ? `SESSION CONTEXT:\n${advisorContext}\n` : ''}`;
 
-  const contentParts: any[] = [];
-  if (referenceImage) {
-    contentParts.push({ inlineData: { data: dataUrlToB64(referenceImage), mimeType: 'image/png' } });
-    contentParts.push({ text: 'REFERENCE: use for massing/layout inspiration.\n\n' });
-  }
   const archHeader = getArchitecturalSnippetHeader(designStyle);
-  contentParts.push({ text: `${sysPrompt}\n\nThe following OpenSCAD architectural snippet header will be PREPENDED to your output. Do not redefine these modules — call them by name in your geometry. The model that emits cube([length, thickness, height]) for a wall instead of wall_assembly(length, height, thickness, ...) fails the output bar.\n\n\`\`\`openscad\n${archHeader}\n\`\`\`\n\nREQUEST: ${prompt}\n\nReturn as JSON.` });
+  const buildArchContentParts = (correction: string) => {
+    const parts: any[] = [];
+    if (referenceImage) {
+      parts.push({ inlineData: { data: dataUrlToB64(referenceImage), mimeType: 'image/png' } });
+      parts.push({ text: 'REFERENCE: use for massing/layout inspiration.\n\n' });
+    }
+    parts.push({ text: `${correction ? correction + '\n\n' : ''}${sysPrompt}\n\nThe following OpenSCAD architectural snippet header will be PREPENDED to your output. Do not redefine these modules — call them by name in your geometry. The model that emits cube([length, thickness, height]) for a wall instead of wall_assembly(length, height, thickness, ...) fails the output bar.\n\n\`\`\`openscad\n${archHeader}\n\`\`\`\n\nREQUEST: ${prompt}\n\nReturn as JSON.` });
+    return parts;
+  };
 
-  const response = await withRetry(() => ai.models.generateContent({
+  const runGenerate = (correction: string) => withRetry(() => ai.models.generateContent({
     model: MODELS.pro,
-    contents: { parts: contentParts },
+    contents: { parts: buildArchContentParts(correction) },
     config: {
       responseMimeType: 'application/json',
       responseSchema: {
@@ -1431,7 +1471,33 @@ ${advisorContext ? `SESSION CONTEXT:\n${advisorContext}\n` : ''}`;
     },
   }));
 
-  return JSON.parse(getResponseText(response));
+  // ── Compliance loop ───────────────────────────────────────────
+  const archConstraintSet = extractNegativeConstraints(prompt);
+
+  let archResponse = await runGenerate('');
+  let archResult = JSON.parse(getResponseText(archResponse));
+
+  const archTarget = (r: any): ValidationTarget => ({
+    openscadCode: r.openscadCode,
+    designNotes: (r.buildingCodeNotes ?? []).join('\n'),
+    materialSchedule: r.materialSchedule,
+    extra: [r.description ?? '', r.name ?? '', ...(r.assemblySteps ?? [])],
+  });
+
+  let archFindings = validateCompliance(archConstraintSet, archTarget(archResult));
+  if (violationsOf(archFindings).length > 0) {
+    const correction = buildRegenCorrectionBlock(archFindings);
+    archResponse = await runGenerate(correction);
+    archResult = JSON.parse(getResponseText(archResponse));
+    archFindings = validateCompliance(archConstraintSet, archTarget(archResult));
+  }
+
+  // Architecture's user-facing notes field is buildingCodeNotes; append the
+  // compliance summary there so it surfaces in the UI without a schema
+  // change.
+  archResult.buildingCodeNotes = [...(archResult.buildingCodeNotes ?? []), summariseFindings(archFindings)];
+
+  return archResult;
 }
 
 // ── Markup Import & Analysis ─────────────────────────────────────────────────
