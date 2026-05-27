@@ -162,6 +162,28 @@ export async function generateLaserDesign(prompt: string, style: string = "minim
     parts.push({ inlineData: { data: dataUrlToB64(referenceImage), mimeType: 'image/png' } });
     parts.push({ text: 'Use the provided reference image as inspiration for the design. Match its proportions and overall form, but adapt it to laser engraving style.\n\n' });
   }
+  const runOnce = async (extraDirective: string) => {
+    const callParts = [...parts];
+    // Replace the last text part (the system + prompt) with an extended version
+    // if extraDirective is present, so retries actually feed back the deviations.
+    if (extraDirective && callParts.length > 0) {
+      const lastIdx = callParts.length - 1;
+      const last = callParts[lastIdx];
+      if (last?.text) {
+        callParts[lastIdx] = { text: last.text + '\n\n' + extraDirective };
+      }
+    }
+    const response = await ai.models.generateContent({
+      model: MODELS.flashImage,
+      contents: { parts: callParts },
+      config: { imageConfig: { aspectRatio: aspectRatio as any, imageSize: '1K' } },
+    });
+    for (const part of response.candidates?.[0]?.content?.parts || []) {
+      if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
+    }
+    return null;
+  };
+
   parts.push({ text: `${constraintBlock}
 
 Generate a high-contrast, black and white stencil suitable for laser engraving of: ${prompt}.
@@ -170,23 +192,23 @@ ${styleDirective}
 
 The output must be clearly reproducible on wood or metal via laser engraving. Produce a single centered design with no text labels unless the user asked for text.` });
 
-  const response = await ai.models.generateContent({
-    model: MODELS.flashImage,
-    contents: { parts },
-    config: {
-      imageConfig: {
-        aspectRatio: aspectRatio as any,
-        imageSize: "1K"
-      }
+  try {
+    const guarded = await generateWithStyleGuard<string | null>(
+      style as DesignStyle,
+      async (extraDirective: string) => {
+        const result = await runOnce(extraDirective);
+        return { result, renderedImageBase64: result ?? '' };
+      },
+      { passThreshold: 0.7, maxRetries: 1 },
+    );
+    if (!guarded.fingerprint.matches) {
+      console.warn(`[SUBSTRATA] laser design style score ${guarded.fingerprint.styleScore.toFixed(2)} below 0.7:`, guarded.fingerprint.deviations);
     }
-  });
-
-  for (const part of response.candidates?.[0]?.content?.parts || []) {
-    if (part.inlineData) {
-      return `data:image/png;base64,${part.inlineData.data}`;
-    }
+    return guarded.result;
+  } catch (err) {
+    console.warn('[SUBSTRATA] style guard failed; returning unchecked laser design:', err);
+    return runOnce('');
   }
-  return null;
 }
 
 /**
@@ -1051,36 +1073,52 @@ export async function generateConceptSketch(
 ): Promise<string | null> {
   const sketchStyleDirective = getSketchStyleDirective(style as DesignStyle);
   const modePrompt = SKETCH_MODE_PROMPTS[sketchMode];
-
-  const parts: any[] = [];
-  if (referenceImage) {
-    parts.push({ inlineData: { data: dataUrlToB64(referenceImage), mimeType: 'image/png' } });
-    parts.push({ text: `Use the provided reference image as a visual guide for proportions and form. Reinterpret it in the sketch style described below.\n\n` });
-  }
   const sketchConstraints = buildConstraintBlock({
     prompt,
     mode: 'maker',
     style: style as DesignStyle,
   });
-  parts.push({ text: `${sketchConstraints}\n\nSUBJECT: ${prompt}\n\n${modePrompt}\n\n${sketchStyleDirective}\n\nProduce one high-quality concept sketch image. No photo-realism — this must look hand-drawn/sketched.` });
 
-  const response = await withRetry(() => ai.models.generateContent({
-    model: MODELS.flashImage,
-    contents: { parts },
-    config: {
-      imageConfig: {
-        aspectRatio: '1:1',
-        imageSize: '1K'
-      }
+  const runOnce = async (extraDirective: string) => {
+    const parts: any[] = [];
+    if (referenceImage) {
+      parts.push({ inlineData: { data: dataUrlToB64(referenceImage), mimeType: 'image/png' } });
+      parts.push({ text: `Use the provided reference image as a visual guide for proportions and form. Reinterpret it in the sketch style described below.\n\n` });
     }
-  }));
+    parts.push({ text: `${sketchConstraints}\n\nSUBJECT: ${prompt}\n\n${modePrompt}\n\n${sketchStyleDirective}\n\nProduce one high-quality concept sketch image. No photo-realism — this must look hand-drawn/sketched.${extraDirective ? '\n\n' + extraDirective : ''}` });
 
-  for (const part of response.candidates?.[0]?.content?.parts || []) {
-    if (part.inlineData) {
-      return `data:image/png;base64,${part.inlineData.data}`;
+    const response = await withRetry(() => ai.models.generateContent({
+      model: MODELS.flashImage,
+      contents: { parts },
+      config: { imageConfig: { aspectRatio: '1:1', imageSize: '1K' } },
+    }));
+
+    for (const part of response.candidates?.[0]?.content?.parts || []) {
+      if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
     }
+    return null;
+  };
+
+  // Wrap in the style guard so a sketch that fails the style rubric gets
+  // one corrective re-roll. Image generations are cheap; the Flash judge is
+  // a single extra call per attempt.
+  try {
+    const guarded = await generateWithStyleGuard<string | null>(
+      style as DesignStyle,
+      async (extraDirective: string) => {
+        const result = await runOnce(extraDirective);
+        return { result, renderedImageBase64: result ?? '' };
+      },
+      { passThreshold: 0.75, maxRetries: 1 },
+    );
+    if (!guarded.fingerprint.matches) {
+      console.warn(`[SUBSTRATA] concept sketch style score ${guarded.fingerprint.styleScore.toFixed(2)} below 0.75:`, guarded.fingerprint.deviations);
+    }
+    return guarded.result;
+  } catch (err) {
+    console.warn('[SUBSTRATA] style guard failed; returning unchecked sketch:', err);
+    return runOnce('');
   }
-  return null;
 }
 
 // ── Style Fingerprint Validator ──────────────────────────────────────────────
