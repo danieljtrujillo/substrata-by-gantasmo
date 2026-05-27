@@ -7,6 +7,8 @@
 // Categorized project archetypes with subsystem breakdowns
 // Used by the advisor and blueprint generator for reference
 
+export type StudioMode = 'maker' | 'architecture' | 'hacker' | 'all';
+
 export interface DesignTemplate {
   id: string;
   name: string;
@@ -16,6 +18,8 @@ export interface DesignTemplate {
   subsystems: string[];
   keyComponents: string[];
   fabricationMethods: string[];
+  /** Studio mode this template belongs to. 'all' = inject regardless. Defaults to 'maker' if absent. */
+  mode?: StudioMode;
 }
 
 export const DESIGN_TEMPLATES: DesignTemplate[] = [
@@ -141,6 +145,96 @@ export const DESIGN_TEMPLATES: DesignTemplate[] = [
     subsystems: ['Enclosure', 'Sensor Probes', 'Pump System', 'Controller', 'Display'],
     keyComponents: ['ESP32', 'Capacitive Soil Moisture Sensor', 'BH1750 Light Sensor', 'DS18B20 Temp', 'Mini Water Pump 3-5V', 'MOSFET Module', 'OLED SSD1306', 'Silicone Tubing'],
     fabricationMethods: ['3D Print: Weatherproof enclosure, probe housing (PETG)', 'Laser Cut: Decorative front panel (3mm ply)', 'Off-shelf: Sensors, pump, tubing, ESP32']
+  },
+
+  // ── Architecture (mode-gated) ─────────────────────────────────
+  {
+    id: 'arch_single_family',
+    name: 'Single-Family House',
+    category: 'Residential',
+    description: 'Two-story SFH on a small urban lot. Gabled or hipped roof, three bedrooms above, open kitchen/living/dining below, attached one-car garage, full basement, code-compliant egress everywhere.',
+    complexity: 'intermediate',
+    mode: 'architecture',
+    subsystems: ['Foundation + slab', 'Wood-frame envelope', 'Roof assembly (gabled / hipped)', 'Fenestration (ABA front / regular sides)', 'Mechanical/electrical chase', 'Garage + driveway', 'Egress staircase'],
+    keyComponents: ['ICF foundation walls', '2x6 stud framing 16" o.c.', '5/8" exterior sheathing', 'Vinyl/fibre-cement siding', 'Asphalt shingle roofing', 'LVL ridge beam', 'Egress windows (≥5.7 sf opening)'],
+    fabricationMethods: ['Site-built wood framing', 'CMU or ICF basement', 'Truss-fabricated roof or stick-framed rafters']
+  },
+  {
+    id: 'arch_adu',
+    name: 'Accessory Dwelling Unit (ADU)',
+    category: 'Residential',
+    description: 'Standalone backyard cottage. Compact 400-800 sf footprint, single story, full kitchen + bath + sleeping area, accessible entry, parking on-grade. Designed to meet typical municipal ADU ordinances.',
+    complexity: 'beginner',
+    mode: 'architecture',
+    subsystems: ['Pier-and-beam or slab foundation', 'Wood-frame envelope', 'Shed or hipped roof', 'Mini-split HVAC', 'Compact kitchenette', 'ADA-compliant bath'],
+    keyComponents: ['2x6 framing', 'Mini-split heat pump', 'Compact stacked W/D', 'On-demand water heater', 'LVT or polished concrete floor'],
+    fabricationMethods: ['Site-built wood framing', 'Modular/prefab panel option', 'Slab-on-grade or pier foundation']
+  },
+  {
+    id: 'arch_mixed_use_4',
+    name: 'Mixed-Use 4-Story',
+    category: 'Commercial',
+    description: 'Ground-floor retail with three levels of residential apartments above. Corner site, fire-rated separation between uses, central stair + elevator, podium parking optional.',
+    complexity: 'advanced',
+    mode: 'architecture',
+    subsystems: ['Concrete podium ground floor', '3 levels Type V wood-frame', 'Retail storefront (curtain wall)', 'Apartment unit grid', 'Egress stair + elevator', 'MEP chase'],
+    keyComponents: ['Concrete podium slab', 'Wood-frame (Type V-A)', 'Aluminum storefront', 'Fire-rated assemblies (2-hr podium, 1-hr corridor)', 'Elevator (MRL)', 'Sprinkler system NFPA 13'],
+    fabricationMethods: ['Cast-in-place concrete podium', 'Prefab wood-frame panels (above podium)', 'Steel stair']
+  },
+  {
+    id: 'arch_courtyard_office',
+    name: 'Courtyard Office Building',
+    category: 'Commercial',
+    description: 'Two-story office around a central planted courtyard. Continuous clerestory on courtyard side for daylighting. Curtain-wall street facade, masonry side walls.',
+    complexity: 'intermediate',
+    mode: 'architecture',
+    subsystems: ['Concrete slab', 'Steel-frame structure', 'Courtyard (open-air or atrium)', 'Curtain-wall street facade', 'Punched-hole side facades', 'Mansard or flat roof + clerestory'],
+    keyComponents: ['Wide-flange steel framing', 'Curtain wall (4" mullion)', 'Clay brick or fibre-cement panel siding', 'Operable clerestory glazing', 'TPO roof membrane'],
+    fabricationMethods: ['Steel erection', 'Curtain-wall panelized install', 'On-site CMU/brick masonry']
+  },
+  {
+    id: 'arch_pavilion',
+    name: 'Park Pavilion',
+    category: 'Civic',
+    description: 'Open-air timber pavilion for a public park. Glulam ridge with cantilevered eaves, butterfly or hipped roof, no walls (or knee-height parapet only), heavy-timber columns on stone bases.',
+    complexity: 'intermediate',
+    mode: 'architecture',
+    subsystems: ['Stone or concrete piers', 'Glulam timber columns', 'Glulam beams + ridge', 'Standing-seam metal or shingle roof', 'Optional knee walls / benches'],
+    keyComponents: ['Glulam 20F-V4', 'Concealed Simpson connectors', 'Standing-seam zinc or copper roofing', 'Stone column bases'],
+    fabricationMethods: ['Prefab glulam delivered + erected on-site', 'Stone masonry bases', 'Pre-engineered metal roofing']
+  },
+  {
+    id: 'arch_micro_cabin',
+    name: 'Off-Grid Micro Cabin',
+    category: 'Residential',
+    description: '160-300 sf solo retreat cabin. Single-pitch shed roof, west-facing solar array, composting toilet, propane cooktop, wood stove, no grid utilities.',
+    complexity: 'beginner',
+    mode: 'architecture',
+    subsystems: ['Pier foundation', 'SIP or 2x4 framing', 'Shed roof', 'Solar electrical', 'Wood-burning stove', 'Composting toilet'],
+    keyComponents: ['Pier footings (CMU or sonotube)', '4" SIPs or 2x4 framing', '5/8" T&G plywood deck', 'Standing-seam metal roof', '300W solar panel x4', '12V Li battery', 'Cubic Mini wood stove'],
+    fabricationMethods: ['Site-built or panelized', 'On-grade pier foundation (no excavation)']
+  },
+  {
+    id: 'arch_retail_kiosk',
+    name: 'Retail Kiosk',
+    category: 'Commercial',
+    description: 'Standalone retail kiosk 80-120 sf. Roll-up service window, storage closet, single ADA-accessible entrance. Designed for sidewalk/plaza placement.',
+    complexity: 'beginner',
+    mode: 'architecture',
+    subsystems: ['Reinforced slab', 'CMU or steel-frame walls', 'Roll-up service shutter', 'Flat or shed roof', 'HVAC mini-split', 'Locking storage closet'],
+    keyComponents: ['Pre-cast concrete pad', 'CMU 6" walls', 'Roll-up door (steel)', 'HVAC mini-split', 'Tempered storefront glass'],
+    fabricationMethods: ['Pre-cast modular delivery', 'On-site CMU + finish']
+  },
+  {
+    id: 'arch_footbridge',
+    name: 'Pedestrian Footbridge',
+    category: 'Civic',
+    description: 'Single-span pedestrian footbridge 8-20m crossing a creek or road. Truss, cable-stayed, or arch typology depending on span. Steel + timber composite deck.',
+    complexity: 'advanced',
+    mode: 'architecture',
+    subsystems: ['Concrete abutments', 'Main structural span (truss / arch / cable)', 'Timber or composite deck', 'Railings (≥1067mm tall, pickets ≤100mm gap)', 'Drainage'],
+    keyComponents: ['Cast-in-place concrete abutments', 'Galvanised steel structure', 'IPE or thermally modified timber deck', 'Stainless cable infill or picket rail'],
+    fabricationMethods: ['Prefab steel main span erected by crane', 'On-site abutment formwork + pour', 'On-site deck install']
   },
 ];
 
@@ -281,9 +375,12 @@ export function getComponentDatabaseSummary(): string {
   return summary;
 }
 
-export function getTemplateSummary(): string {
-  let summary = '## DESIGN TEMPLATE REFERENCE\n';
-  for (const t of DESIGN_TEMPLATES) {
+export function getTemplateSummary(mode?: StudioMode): string {
+  const filtered = mode && mode !== 'all'
+    ? DESIGN_TEMPLATES.filter(t => (t.mode ?? 'maker') === mode || t.mode === 'all')
+    : DESIGN_TEMPLATES;
+  let summary = `## DESIGN TEMPLATE REFERENCE${mode ? ` (${mode} mode)` : ''}\n`;
+  for (const t of filtered) {
     summary += `\n### ${t.name} [${t.category}] (${t.complexity})\n`;
     summary += `${t.description}\n`;
     summary += `Subsystems: ${t.subsystems.join(', ')}\n`;

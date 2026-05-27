@@ -10,6 +10,8 @@ import { getComponentDatabaseSummary, getTemplateSummary, DESIGN_PRACTICES, COMM
 import { getStyleDirective, get3DStyleDirective, getSketchStyleDirective, type DesignStyle } from '../styleGuides';
 import { getStyleSnippetHeader, getStyleSnippetDirective, withStyleHeader } from '../lib/styleSnippets';
 import { getRegistrySummary, getDfmSummary } from '../engineeringRegistry';
+import { buildConstraintBlock } from '../lib/designConstraints';
+import { getArchitecturalSnippetHeader, getArchitecturalSnippetDirective } from '../lib/architecturalSnippets';
 
 interface RelayResponse {
   text?: string;
@@ -146,12 +148,19 @@ const GENERATE_BLUEPRINT_TOOL: FunctionDeclaration = {
 
 export async function generateLaserDesign(prompt: string, style: string = "minimalist", aspectRatio: string = "1:1", referenceImage?: string) {
   const styleDirective = getStyleDirective(style as DesignStyle);
+  const constraintBlock = buildConstraintBlock({
+    prompt,
+    mode: 'laser',
+    style: style as DesignStyle,
+  });
   const parts: any[] = [];
   if (referenceImage) {
     parts.push({ inlineData: { data: dataUrlToB64(referenceImage), mimeType: 'image/png' } });
     parts.push({ text: 'Use the provided reference image as inspiration for the design. Match its proportions and overall form, but adapt it to laser engraving style.\n\n' });
   }
-  parts.push({ text: `Generate a high-contrast, black and white stencil suitable for laser engraving of: ${prompt}.
+  parts.push({ text: `${constraintBlock}
+
+Generate a high-contrast, black and white stencil suitable for laser engraving of: ${prompt}.
 
 ${styleDirective}
 
@@ -166,6 +175,77 @@ The output must be clearly reproducible on wood or metal via laser engraving. Pr
         imageSize: "1K"
       }
     }
+  });
+
+  for (const part of response.candidates?.[0]?.content?.parts || []) {
+    if (part.inlineData) {
+      return `data:image/png;base64,${part.inlineData.data}`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Label / sticker design — kept separate from laser stencil generation
+ * because the constraints are genuinely different. Thermal printers cannot
+ * print strokes < 0.2mm regardless of DPI; have typography hierarchy +
+ * barcode-zone rules; pure black-on-white with no greyscale. Laser
+ * stencils are graphical: labels are typographic.
+ */
+export async function generateLabelDesign(
+  prompt: string,
+  style: string = 'minimalist',
+  widthMm: number = 50,
+  heightMm: number = 30,
+  dpi: number = 203,
+  contentHints?: string,
+) {
+  const styleDirective = getStyleDirective(style as DesignStyle);
+  const constraintBlock = buildConstraintBlock({
+    prompt,
+    mode: 'label',
+    style: style as DesignStyle,
+  });
+
+  const parts: any[] = [{
+    text: `${constraintBlock}
+
+Design a thermal-printable label/sticker.
+
+PRINT CONSTRAINTS (HARD):
+- Output: pure black ink on white background. NO greyscale, NO halftones, NO gradients (thermal cannot tone).
+- Minimum stroke width: 0.2mm regardless of DPI (anything thinner ghosts or drops out).
+- Safe area: 3mm inner margin all sides (adhesive labels need bleed clearance).
+- Die-cut corner radius: respect ≥ 1.5mm minimum.
+- Physical size: ${widthMm}mm × ${heightMm}mm at ${dpi} DPI.
+
+LAYOUT GRID (5-zone): header / body / data / barcode-area / footer. Populate only the zones the prompt calls for.
+
+TYPOGRAPHY:
+- ONE display face + ONE text face (modern sans-serif unless the style guide says otherwise).
+- Minimum cap height 1.6mm. Tracking ≥ -0.5% for text, +5% to +10% for display caps.
+- Hierarchy: largest element is the brand/identifier, second-largest is primary data, body type is supporting. NEVER use equal sizes.
+
+BARCODE / QR (only if requested):
+- Module size ≥ 0.5mm; quiet zone ≥ 2mm all sides; QR ECC level ≥ M.
+
+${styleDirective}
+
+${contentHints ? `\nADDITIONAL CONTENT GUIDANCE:\n${contentHints}\n` : ''}
+SUBJECT: ${prompt}
+
+Produce one centered design that respects the constraints above. NO laser stencil aesthetic — this is a printed label, not an etched plaque.`,
+  }];
+
+  const response = await ai.models.generateContent({
+    model: MODELS.flashImage,
+    contents: { parts },
+    config: {
+      imageConfig: {
+        aspectRatio: (widthMm > heightMm ? '16:9' : '9:16') as any,
+        imageSize: '1K',
+      },
+    },
   });
 
   for (const part of response.candidates?.[0]?.content?.parts || []) {
@@ -303,12 +383,13 @@ RULES:
 1. Be brief but information-dense. Use bullet points and specs.
 2. ALWAYS end your response with a clear next-step suggestion (unless confirming a tool call).
 3. If the user wants to save laser settings, trigger 'save_material_preset'.
-4. When the user is ready to build (says "let's build it", "design this", "make it", etc.), trigger 'generate_blueprint' with a comprehensive project description summarizing the entire conversation.
+4. When the user is ready to build (says "let's build it", "design this", "make it", etc.), trigger 'generate_blueprint' with a description that EXPLICITLY ENUMERATES every desired feature AND every NEGATIVE constraint the user stated ("no X", "without Y", "must not have Z"), AND every preferred or banned material/component. Phrase negatives as "FORBIDDEN: ..." at the END of the description so they sit next to the JSON boundary and the downstream generator cannot miss them.
 5. Proactively reference similar community projects and suggest searching for them.
 6. When recommending components, use specific part names and approximate prices.
 7. Think about what goes into the project systematically: What are ALL the subsystems? What interfaces between them?
 8. Proactively suggest novel strategies from the list above when they fit the user's project.
-9. When the user seems stuck, suggest using the Sketch panel to visualize ideas before engineering them.`;
+9. When the user seems stuck, suggest using the Sketch panel to visualize ideas before engineering them.
+10. PARSE USER CONSTRAINTS LITERALLY. If the user says "no X", "without X", "I don't want X", treat it as an absolute ban. Do NOT suggest X. Do NOT route around it ("you could use a Y which is similar to X"). If a constraint makes the project impossible, say so explicitly and ask for a relaxation rather than silently ignoring it.`;
 
 export async function consultLaserExpert(query: string, history: any[] = [], useThinking: boolean = false, imageBase64?: string) {
   const modelName = useThinking ? "gemini-3.1-pro-preview" : "gemini-3-flash-preview";
@@ -492,9 +573,17 @@ export async function generateProjectBlueprint(
   referenceImage?: string
 ) {
   const componentDb = getComponentDatabaseSummary();
-  const templateDb = getTemplateSummary();
+  const templateDb = getTemplateSummary('maker');
 
-  const systemPrompt = `You are an expert industrial designer, mechanical engineer, and electronics architect at GANTASMO.
+  const constraintBlock = buildConstraintBlock({
+    prompt,
+    mode: 'maker',
+    style: designStyle as DesignStyle,
+  });
+
+  const systemPrompt = `${constraintBlock}
+
+You are an expert industrial designer, mechanical engineer, and electronics architect at GANTASMO.
 You ACTUALLY design parts — not just list them. You think through every subsystem, every interface, every fastener.
 
 ${componentDb}
@@ -529,26 +618,42 @@ CRITICAL 3D DESIGN RULES:
 - Always define origin consistently: front-left-bottom corner or center-bottom
 - Every primitive MUST have explicit numeric dimensions, never hardcode 1 or 0.5 as placeholder
 
-CRITICAL: GENERATE REAL 3D GEOMETRY WITH CSG OPERATIONS
-Your OpenSCAD code must produce parts that actually LOOK like the real object, not just basic primitive shapes.
-Use these techniques to create realistic geometry:
-- difference() to cut holes, pockets, channels, and negative features from solid bodies
-- union() to join multiple shapes into complex forms
-- intersection() for creating shapes by overlapping
-- hull() to create smooth organic transitions between primitives
-- linear_extrude(height=H) with polygon() for 2D profile extrusion (ideal for complex profiles)
-- rotate_extrude() for axially symmetric parts (knobs, wheels, pulleys)
-- minkowski() for adding fillets/chamfers (use small sphere for rounding)
-- for() loops for repeated features (mounting holes, fins, slots, patterns)
-- Use the Engineering Parts Registry above — include the exact OpenSCAD modules for standard parts (NEMA17, 608 bearings, M3 bolts, etc.)
+PROFILE-FIRST GEOMETRY POLICY — this is the rule that separates "designed" from "tutorial-example":
 
-Examples of GOOD vs BAD:
-BAD: A motor is just cylinder(d=42, h=40) — this is an anonymous cylinder
-GOOD: A motor has a body (cube), boss (cylinder on top), shaft (thin cylinder extending out), mounting holes (difference with 4 cylinders at mount_spacing), wire channel (small cube cutout on back)
-BAD: A bracket is just cube([20,20,2]) — this is just a flat rectangle
-GOOD: A bracket has an L-shape (union of two cubes), mounting holes (difference with cylinders), rounded corners (minkowski with small sphere), and slots for adjustment
-BAD: An enclosure is cube([100,60,40])
-GOOD: An enclosure is difference() { cube([100,60,40]); translate([2,2,2]) cube([96,56,38]); } with mounting bosses, ventilation slots, LCD cutout, button holes, cable grommet holes
+If any module contains more than 5 raw cube() / cylinder() / sphere() calls glued together with union/translate, STOP and rewrite using ONE of:
+- rotate_extrude($fn=120) polygon([...])  — for any axially symmetric part (knobs, wheels, finials, pulleys, lampshades, bottle bodies).
+- linear_extrude(height=H) polygon([...]) — for any part with a constant cross-section (L-brackets, gussets, custom heatsinks, plate-with-feature outlines).
+- hull() between two or more meaningfully-different cross-sections — for smooth organic transitions (grips, ear loops, bezels, aerodynamic shapes).
+- minkowski() { object; sphere(r=fillet, $fn=48); } — round all edges in one pass. Use for any product-design fillet > 1mm.
+- offset(r=N) on 2D shapes — derive wall outlines from cavity outlines, compensate kerf, derive 2D fillets.
+
+Default to 1-2mm fillets on EXTERNAL edges, 0.5mm chamfers on hole entries, 0.4mm fillets on inside corners — a part with no fillets reads as a CAD-tutorial example, not a designed object.
+
+GOOD vs BAD examples (profile-first, NOT primitive-stacked):
+
+BAD  — knob as a stack of three cylinders:
+  cylinder(d=30,h=4); translate([0,0,4]) cylinder(d1=30,d2=24,h=10); translate([0,0,14]) cylinder(d=24,h=2);
+GOOD — knob as a revolved profile:
+  rotate_extrude($fn=120) polygon([[0,0],[15,0],[15,3],[13,5],[10,9],[8,14],[10,18],[15,20],[15,22],[0,22]]);
+
+BAD  — bracket as L of two cubes:
+  union() { cube([40,20,4]); cube([4,20,30]); }
+GOOD — bracket as extruded L profile with filleted gusset:
+  linear_extrude(height=20) offset(r=2) offset(r=-2) polygon([[0,0],[40,0],[40,4],[4,4],[4,30],[0,30]]);
+  // then hull() a triangular gusset between the legs and minkowski-fillet exterior edges.
+
+BAD  — enclosure as cube minus cube:
+  difference() { cube([100,60,40]); translate([2,2,2]) cube([96,56,38]); }
+GOOD — enclosure as filleted shell with profiled lid:
+  minkowski() { difference() { cube([100,60,40]); translate([wall,wall,wall]) cube([100-2*wall, 60-2*wall, 40]); } sphere(r=2,$fn=48); }
+  // then add mounting bosses, ventilation slots (linear_extrude a slot polygon), recessed display window with chamfered reveal.
+
+BAD  — motor surrogate:
+  cylinder(d=42, h=40);
+GOOD — call the named registry module (real mount pattern, real shaft, real wire channel):
+  NEMA17();   // from the engineering registry — includes body + boss + shaft + 4×M3 mount + cable exit.
+
+Use the Engineering Parts Registry above for every standard component (NEMA17, 608ZZ, M3 bolts, etc.) — DO NOT model them as anonymous cylinders.
 
 ALWAYS include an assembly() module that shows how ALL parts fit together with translate/rotate positioning.
 `;
@@ -915,7 +1020,12 @@ export async function generateConceptSketch(
     parts.push({ inlineData: { data: dataUrlToB64(referenceImage), mimeType: 'image/png' } });
     parts.push({ text: `Use the provided reference image as a visual guide for proportions and form. Reinterpret it in the sketch style described below.\n\n` });
   }
-  parts.push({ text: `SUBJECT: ${prompt}\n\n${modePrompt}\n\n${sketchStyleDirective}\n\nProduce one high-quality concept sketch image. No photo-realism — this must look hand-drawn/sketched.` });
+  const sketchConstraints = buildConstraintBlock({
+    prompt,
+    mode: 'maker',
+    style: style as DesignStyle,
+  });
+  parts.push({ text: `${sketchConstraints}\n\nSUBJECT: ${prompt}\n\n${modePrompt}\n\n${sketchStyleDirective}\n\nProduce one high-quality concept sketch image. No photo-realism — this must look hand-drawn/sketched.` });
 
   const response = await withRetry(() => ai.models.generateContent({
     model: MODELS.flashImage,
@@ -1127,7 +1237,8 @@ export async function generateArchitecturalBlueprint(
   buildingType: 'residential' | 'commercial' | 'industrial' | 'mixed-use' | 'landscape' = 'residential',
   units: 'metric' | 'imperial' = 'metric',
   advisorContext = '',
-  referenceImage?: string
+  referenceImage?: string,
+  designStyle: DesignStyle = 'classical',
 ): Promise<{
   name: string;
   description: string;
@@ -1156,8 +1267,20 @@ export async function generateArchitecturalBlueprint(
     ? 'UNITS: dimensions in INCHES. In OpenSCAD multiply by 25.4 to get mm.'
     : 'UNITS: All dimensions in MILLIMETERS.';
 
-  const sysPrompt = `You are a licensed architect and BIM modeler for ${buildingType} construction.
+  const archConstraints = buildConstraintBlock({
+    prompt,
+    mode: 'architecture',
+    style: designStyle,
+  });
+  const archTemplates = getTemplateSummary('architecture');
+  const archSnippetDirective = getArchitecturalSnippetDirective(designStyle);
+
+  const sysPrompt = `${archConstraints}
+
+You are a licensed architect and BIM modeler for ${buildingType} construction working in the ${designStyle} idiom.
 ${unitNote}
+
+${archTemplates}
 
 AIA/NCS LAYER NAMES: A-WALL, A-DOOR, A-DOOR-SWNG, A-WIND, A-STAIR, A-ROOF, A-CEIL, A-FLOR, A-FURN, A-EQPM, S-COLS, S-BEAM, S-SLAB, S-FNDN, M-HVAC-SUPL, M-HVAC-RETN, P-PIPE-SANR, P-PIPE-DOMW, P-PIPE-FTPR, P-FIXT, E-LITE, E-POWR, E-PANL, C-PROP, C-TOPO, A-ANNO-DIMS, A-ANNO-TEXT, A-ANNO-GRDX, A-ANNO-SECT.
 
@@ -1166,18 +1289,30 @@ STANDARDS (metric):
 - Floor-to-floor: residential 2743mm (9'-0"), commercial 3658mm (12'-0")
 - ADA door clear: ≥ 813mm; standard widths: 813, 914, 1067mm
 - Window sill: 864mm residential, 915mm commercial; head: 2134mm
-- Column grid: 6000–9000mm o.c. commercial; 4000–5000mm residential
+- Column grid: 6000-9000mm o.c. commercial; 4000-5000mm residential
 - Stair rise ≤ 178mm, run ≥ 279mm (IBC 1011.5); ADA ramp ≤ 1:12
 - Natural light: window area ≥ 8% of room floor area (IBC 1205.2)
 
-OPENSCAD FOR ARCHITECTURE:
-- Walls: cube([length, thickness, height]) with translate(); tag //LAYER: A-WALL
-- Doors: difference() into wall + door_slab module + swing arc; tag //LAYER: A-DOOR
-- Windows: difference() at sill/head heights; tag //LAYER: A-WIND
-- Columns: cylinder(r=r, h=floor_h); tag //LAYER: S-COLS
-- Slabs: cube([bx, by, slab_t]); tag //LAYER: S-SLAB
-- Use for() loops for column grids, window bays, stair treads
-- Include assembly() positioning all elements with translate()
+OPENSCAD FOR ARCHITECTURE — CALL THE MODULE, DO NOT REINVENT THE PRIMITIVE.
+The architectural snippet pack at the top of your output provides parameterised assemblies for every common building element. Use them. The previous rule "Walls: cube([length, thickness, height])" was wrong and is REPLACED by:
+
+- Walls: wall_assembly(length, height, thickness, pilaster_spacing, pilaster_depth, base, cap) with //LAYER: A-WALL
+  A wall longer than 6m MUST have pilasters or articulation, NOT a single unbroken extrusion.
+  Add a base_course(...) call at every primary elevation unless the style is minimalist.
+- Doors: door_assembly(width, height, leaf_type, frame_d) with //LAYER: A-DOOR
+- Windows: window_assembly(width, height, frame_d, mullion_count, head, sill_projection) with //LAYER: A-WIND
+  Use fenestration_grid(...) for repeated windows on a rhythm — NEVER hand-place windows ad hoc.
+- Columns: column_assembly(order, base_h, shaft_h, cap_h, flutes, entasis) with //LAYER: S-COLS
+  No bare cylinders. A column with no base/capital is not a column.
+- Roof: roof_assembly(type, span, depth, pitch_deg, overhang) — choose appropriate type per building.
+  Default to "gabled" or "hipped" residential, "shed" or "butterfly" modern commercial, NEVER default to flat. Always include eave overhang for drainage and sun shading.
+- Cornice / parapet: cornice_assembly(length, projection, return_depth, profile) at the top of every primary elevation. Pick profile from the style overlay's default_cornice_profile.
+- Balustrade: balustrade_assembly(length, height, post_count, baluster_profile) on balconies, terraces, exterior stairs, parapet walks.
+- Slabs: cube([bx, by, slab_t]) is still fine for slabs and floor decks where geometric simplicity is correct. Tag //LAYER: S-SLAB.
+- Use for() loops for column grids and stair treads. Include assembly() positioning all elements.
+
+PROFILE-FIRST OUTSIDE THE SNIPPET PACK:
+If you need a building element NOT covered by the snippet pack, use rotate_extrude or linear_extrude with a polygon profile — NEVER glue together cubes and cylinders. A "balcony" is a linear_extruded slab profile with a cornice cap, NOT cube([4000,800,200]).
 
 FLOOR PLAN SVG (1px = 10mm):
 - Walls: grey filled rect, stroke="black"
@@ -1187,6 +1322,12 @@ FLOOR PLAN SVG (1px = 10mm):
 - Column grid: circles at intersections, dashdot grid lines, grid bubble labels
 - North arrow top-right; scale bar bottom-left
 - Wrap entire plan in <svg> with <title> element
+
+MATERIAL SCHEDULE — spec field MUST include trade name + standard designation + bond/finish.
+Example: { item: "Exterior facing brick", spec: "Norman brick, ASTM C216 SW Type FBS, running bond, lime Type N mortar", qty: "12,400", unit: "units" }.
+Bad: { spec: "wood" } — REJECTED, not enough information for a builder.
+
+${archSnippetDirective}
 
 CODE-CHECKABLE DESCRIPTOR (return in buildingDescriptor):
 For EVERY door, stair, ramp, and habitable room in the OpenSCAD model, emit a record so the
@@ -1209,7 +1350,8 @@ ${advisorContext ? `SESSION CONTEXT:\n${advisorContext}\n` : ''}`;
     contentParts.push({ inlineData: { data: dataUrlToB64(referenceImage), mimeType: 'image/png' } });
     contentParts.push({ text: 'REFERENCE: use for massing/layout inspiration.\n\n' });
   }
-  contentParts.push({ text: `${sysPrompt}\n\nREQUEST: ${prompt}\n\nReturn as JSON.` });
+  const archHeader = getArchitecturalSnippetHeader(designStyle);
+  contentParts.push({ text: `${sysPrompt}\n\nThe following OpenSCAD architectural snippet header will be PREPENDED to your output. Do not redefine these modules — call them by name in your geometry. The model that emits cube([length, thickness, height]) for a wall instead of wall_assembly(length, height, thickness, ...) fails the output bar.\n\n\`\`\`openscad\n${archHeader}\n\`\`\`\n\nREQUEST: ${prompt}\n\nReturn as JSON.` });
 
   const response = await withRetry(() => ai.models.generateContent({
     model: MODELS.pro,

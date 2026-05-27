@@ -232,10 +232,15 @@ export function getStyleSnippetDirective(style: DesignStyle): string {
   return `STYLE PRIMITIVES (use these helper modules — they are pre-defined in the file header):
 ${pack.modules.map(m => `  - ${m}()`).join('\n')}
 
-Compose your design from these primitives wherever possible. They encode the
-"${style}" visual language. You may still use cube()/cylinder()/sphere() for
-generic geometry, but every signature element should call one of the helpers
-above so the style is unmistakable.`;
+Compose your design from these primitives. They encode the "${style}" visual
+language. HARD POLICY: at least 60% of geometry volume MUST come from these
+helper-module calls or from profile-first ops (rotate_extrude/linear_extrude/
+hull/minkowski/offset). Raw cube/cylinder/sphere are PERMITTED ONLY for:
+  (a) hidden internal mounting bosses,
+  (b) cutout solids inside difference() blocks,
+  (c) reference geometry tagged with a "//REF" comment.
+Any other raw primitive call is a style violation and must be replaced with a
+helper call or a profile-first equivalent.`;
 }
 
 /**

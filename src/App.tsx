@@ -117,7 +117,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { processImageForLaser, ImageProcessOptions, generateEdgeSilhouette, extractProfileForExtrusion, generateDisplacementMesh } from './lib/imageProcessor';
 import { 
-  generateLaserDesign, 
+  generateLaserDesign,
+  generateLabelDesign, 
   consultLaserExpert, 
   analyzeLaserMaterial,
   analyzeLaserMaterialStructured,
@@ -1205,10 +1206,12 @@ export default function App() {
     }
     setIsGeneratingLabel(true);
     try {
-      const result = await generateLaserDesign(
-        `Design a label/sticker: ${labelPrompt}. High contrast, clean edges, suitable for thermal printing at ${labelSettings.dpi} DPI. Dimensions: ${labelSettings.labelWidth}mm x ${labelSettings.labelHeight}mm. Black and white only.`,
+      const result = await generateLabelDesign(
+        labelPrompt,
         designStyle,
-        labelSettings.labelWidth > labelSettings.labelHeight ? '16:9' : '9:16'
+        labelSettings.labelWidth,
+        labelSettings.labelHeight,
+        labelSettings.dpi,
       );
       setLabelDesignImage(result);
       setLabelSilhouetteSvg(null);
@@ -1968,7 +1971,7 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
       let workerSource: string | undefined;
       const data: any = studioMode === 'architecture'
         ? await (async () => {
-            const arch = await generateArchitecturalBlueprint(enrichedPrompt, 'residential', 'metric', '', referenceImage || undefined);
+            const arch = await generateArchitecturalBlueprint(enrichedPrompt, 'residential', 'metric', '', referenceImage || undefined, designStyle as any);
             // Map building blueprint shape onto the prototype-project shape. The Part interface
             // expects sourcing fields (price/source/url/speed/specs) — we synthesize sensible
             // defaults for materials so downstream UI (BOM tables, sourcing badges) doesn't crash.
