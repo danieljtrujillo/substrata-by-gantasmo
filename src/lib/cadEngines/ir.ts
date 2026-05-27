@@ -8,8 +8,17 @@ const Plane = z.enum(['XY', 'XZ', 'YZ']);
 const SketchPrimitive = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('rect'), origin: Vec2, width: z.number(), height: z.number() }),
   z.object({ kind: z.literal('circle'), center: Vec2, radius: z.number() }),
+  z.object({ kind: z.literal('ellipse'), center: Vec2, rx: z.number(), ry: z.number(), rotationDeg: z.number().default(0) }),
   z.object({ kind: z.literal('polygon'), points: z.array(Vec2).min(3) }),
   z.object({ kind: z.literal('slot'), p1: Vec2, p2: Vec2, width: z.number() }),
+  // arc — partial circle defined by centre + radius + start/end angles
+  z.object({ kind: z.literal('arc'), center: Vec2, radius: z.number(), startDeg: z.number(), endDeg: z.number() }),
+  // bezier — closed cubic Bezier loop given a sequence of (anchor, h1, h2)
+  // control triplets. min 2 anchors so the curve actually closes.
+  z.object({
+    kind: z.literal('bezier'),
+    controls: z.array(z.object({ anchor: Vec2, h1: Vec2, h2: Vec2 })).min(2),
+  }),
 ]);
 
 const SketchFeature = z.object({
@@ -98,6 +107,38 @@ const TransformFeature = z.object({
   scale: Vec3.default([1, 1, 1]),
 });
 
+// Mirror — reflect a solid across a plane. Cheaper than a generic transform
+// for symmetric parts.
+const MirrorFeature = z.object({
+  op: z.literal('mirror'),
+  id: z.string(),
+  target: z.string(),
+  plane: Plane.default('YZ'),
+  /** Keep both copies (true) or only the mirrored half (false). */
+  keepOriginal: z.boolean().default(true),
+});
+
+// Loft — interpolate a smooth solid through two or more sketches stacked
+// along a common axis. The defining sketches must already exist by id.
+const LoftFeature = z.object({
+  op: z.literal('loft'),
+  id: z.string(),
+  sketchIds: z.array(z.string()).min(2),
+  ruled: z.boolean().default(false),
+  closed: z.boolean().default(false),
+});
+
+// Sweep — extrude a profile sketch along a 3D path sketch. The path may be
+// a polyline or contain arcs / beziers.
+const SweepFeature = z.object({
+  op: z.literal('sweep'),
+  id: z.string(),
+  profileSketchId: z.string(),
+  pathSketchId: z.string(),
+  twistDegPerUnit: z.number().default(0),
+  multisection: z.boolean().default(false),
+});
+
 export const CadFeature = z.discriminatedUnion('op', [
   SketchFeature,
   ExtrudeFeature,
@@ -109,6 +150,9 @@ export const CadFeature = z.discriminatedUnion('op', [
   PatternFeature,
   HolePatternFeature,
   TransformFeature,
+  MirrorFeature,
+  LoftFeature,
+  SweepFeature,
 ]);
 
 export const CadPart = z.object({

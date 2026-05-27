@@ -39,7 +39,37 @@ class SlotPrimitive(BaseModel):
     width: float
 
 
-SketchPrimitive = Union[RectPrimitive, CirclePrimitive, PolygonPrimitive, SlotPrimitive]
+class EllipsePrimitive(BaseModel):
+    kind: Literal["ellipse"]
+    center: Vec2
+    rx: float
+    ry: float
+    rotationDeg: float = 0.0
+
+
+class ArcPrimitive(BaseModel):
+    kind: Literal["arc"]
+    center: Vec2
+    radius: float
+    startDeg: float
+    endDeg: float
+
+
+class BezierControl(BaseModel):
+    anchor: Vec2
+    h1: Vec2
+    h2: Vec2
+
+
+class BezierPrimitive(BaseModel):
+    kind: Literal["bezier"]
+    controls: conlist(BezierControl, min_length=2)
+
+
+SketchPrimitive = Union[
+    RectPrimitive, CirclePrimitive, EllipsePrimitive,
+    PolygonPrimitive, SlotPrimitive, ArcPrimitive, BezierPrimitive,
+]
 
 
 class SketchFeature(BaseModel):
@@ -139,6 +169,31 @@ class TransformFeature(BaseModel):
     scale: Vec3 = (1.0, 1.0, 1.0)
 
 
+class MirrorFeature(BaseModel):
+    op: Literal["mirror"]
+    id: str
+    target: str
+    plane: Plane = "YZ"
+    keepOriginal: bool = True
+
+
+class LoftFeature(BaseModel):
+    op: Literal["loft"]
+    id: str
+    sketchIds: conlist(str, min_length=2)
+    ruled: bool = False
+    closed: bool = False
+
+
+class SweepFeature(BaseModel):
+    op: Literal["sweep"]
+    id: str
+    profileSketchId: str
+    pathSketchId: str
+    twistDegPerUnit: float = 0.0
+    multisection: bool = False
+
+
 CadFeature = Union[
     SketchFeature,
     ExtrudeFeature,
@@ -150,6 +205,9 @@ CadFeature = Union[
     PatternFeature,
     HolePatternFeature,
     TransformFeature,
+    MirrorFeature,
+    LoftFeature,
+    SweepFeature,
 ]
 
 

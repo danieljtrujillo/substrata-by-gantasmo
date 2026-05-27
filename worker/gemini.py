@@ -58,8 +58,14 @@ Each feature is one of these shapes (the `op` field discriminates):
     sketch_primitive variants:
       { "kind":"rect",    "origin":[x,y], "width":n, "height":n }
       { "kind":"circle",  "center":[x,y], "radius":n }
+      { "kind":"ellipse", "center":[x,y], "rx":n, "ry":n, "rotationDeg":n }
       { "kind":"polygon", "points":[[x,y], [x,y], ...] }      // 3+ points
       { "kind":"slot",    "p1":[x,y], "p2":[x,y], "width":n }
+      { "kind":"arc",     "center":[x,y], "radius":n, "startDeg":n, "endDeg":n }
+      { "kind":"bezier",  "controls":[
+          { "anchor":[x,y], "h1":[x,y], "h2":[x,y] },   // 2+ control points
+          ...
+        ] }                  // closed cubic bezier loop, anchors on the curve, h1/h2 are handles
 
   { "op":"extrude",   "id":string, "sketchId":string, "distance":n,
     "taperDeg":n,                 // optional, default 0
@@ -92,6 +98,24 @@ Each feature is one of these shapes (the `op` field discriminates):
 
   { "op":"transform", "id":string, "target":string,
     "translate":[x,y,z], "rotateDeg":[rx,ry,rz], "scale":[sx,sy,sz] }
+
+  { "op":"mirror",    "id":string, "target":string,
+    "plane":"XY"|"XZ"|"YZ", "keepOriginal":bool }
+    // reflects target across plane. keepOriginal=true unions both copies.
+
+  { "op":"loft",      "id":string,
+    "sketchIds":[string, string, ...],          // 2+ sketches, stacked along common axis
+    "ruled":bool, "closed":bool }
+    // smoothly interpolates a solid through stacked sketches.
+    // USE FOR: ergonomic grips, organic transitions, aerodynamic shapes,
+    // tapered handles, custom heat-sink profiles.
+
+  { "op":"sweep",     "id":string,
+    "profileSketchId":string,                   // 2D cross-section
+    "pathSketchId":string,                      // 2D path the profile follows
+    "twistDegPerUnit":n, "multisection":bool }
+    // extrudes a profile along a path. USE FOR: tubing, cables, handrails,
+    // twisted columns, organic vines, snake-form ducting.
 """
 
 

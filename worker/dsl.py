@@ -20,7 +20,9 @@ from schema import (
     SketchFeature, ExtrudeFeature, RevolveFeature,
     FilletFeature, ChamferFeature, ShellFeature,
     BooleanFeature, PatternFeature, HolePatternFeature, TransformFeature,
-    RectPrimitive, CirclePrimitive, PolygonPrimitive, SlotPrimitive,
+    MirrorFeature, LoftFeature, SweepFeature,
+    RectPrimitive, CirclePrimitive, EllipsePrimitive,
+    PolygonPrimitive, SlotPrimitive, ArcPrimitive, BezierPrimitive,
 )
 
 
@@ -68,12 +70,59 @@ class IRTranspiler:
                 wp = wp.center(prim.origin[0], prim.origin[1]).rect(prim.width, prim.height)
             elif isinstance(prim, CirclePrimitive):
                 wp = wp.center(prim.center[0], prim.center[1]).circle(prim.radius)
+            elif isinstance(prim, EllipsePrimitive):
+                # CadQuery's `ellipse(rx, ry)` lives at the wp centre. Rotate
+                # if requested by transforming the workplane in-place.
+                wp = wp.center(prim.center[0], prim.center[1])
+                if prim.rotationDeg:
+                    wp = wp.rotate((0, 0, 0), (0, 0, 1), prim.rotationDeg)
+                wp = wp.ellipse(prim.rx, prim.ry)
             elif isinstance(prim, PolygonPrimitive):
                 wp = wp.polyline(list(prim.points)).close()
             elif isinstance(prim, SlotPrimitive):
                 wp = wp.slot2D(_distance(prim.p1, prim.p2), prim.width, 0).moveTo(
                     (prim.p1[0] + prim.p2[0]) / 2, (prim.p1[1] + prim.p2[1]) / 2,
                 )
+            elif isinstance(prim, ArcPrimitive):
+                # Approximate arc as a polyline of N segments. CadQuery has
+                # `radiusArc` and `threePointArc` but require explicit start
+                # positioning that our IR doesn't carry — polyline is the
+                # robust fallback.
+                segments = 48
+                from math import cos, sin, pi
+                pts = []
+                span_deg = prim.endDeg - prim.startDeg
+                for i in range(segments + 1):
+                    t = i / segments
+                    a = (prim.startDeg + t * span_deg) * pi / 180.0
+                    pts.append((prim.center[0] + prim.radius * cos(a),
+                                prim.center[1] + prim.radius * sin(a)))
+                wp = wp.polyline(pts)
+            elif isinstance(prim, BezierPrimitive):
+                # Sample a closed cubic Bezier loop. Each control is
+                # (anchor, h1, h2). Segment i runs from control[i].anchor to
+                # control[i+1].anchor, with h2 of i as the outgoing handle
+                # and h1 of i+1 as the incoming handle.
+                segments_per = 24
+                pts = []
+                n = len(prim.controls)
+                for i in range(n):
+                    c0 = prim.controls[i]
+                    c1 = prim.controls[(i + 1) % n]
+                    for s in range(segments_per):
+                        t = s / segments_per
+                        mt = 1 - t
+                        x = (mt**3 * c0.anchor[0]
+                             + 3 * mt**2 * t * c0.h2[0]
+                             + 3 * mt * t**2 * c1.h1[0]
+                             + t**3 * c1.anchor[0])
+                        y = (mt**3 * c0.anchor[1]
+                             + 3 * mt**2 * t * c0.h2[1]
+                             + 3 * mt * t**2 * c1.h1[1]
+                             + t**3 * c1.anchor[1])
+                        pts.append((x, y))
+                pts.append((prim.controls[0].anchor[0], prim.controls[0].anchor[1]))
+                wp = wp.polyline(pts).close()
             else:
                 raise TranspileError(f"unknown sketch primitive: {prim.kind}")
         self.sketches[f.id] = wp
@@ -208,6 +257,48 @@ class IRTranspiler:
             raise TranspileError("polar pattern not implemented yet")
         else:
             raise TranspileError(f"unknown pattern kind '{f.kind}'")
+        self.solids[f.id] = result
+        self.last_id = f.id
+
+    # ── Mirror ─────────────────────────────────────────────────────────────
+    def _op_mirror(self, f: MirrorFeature) -> None:
+        target = self.solids.get(f.target)
+        if target is None:
+            raise TranspileError(f"mirror '{f.id}' references unknown solid '{f.target}'")
+        mirrored = target.mirror(mirrorPlane=f.plane)
+        result = target.union(mirrored) if f.keepOriginal else mirrored
+        self.solids[f.id] = result
+        self.last_id = f.id
+
+    # ── Loft ───────────────────────────────────────────────────────────────
+    def _op_loft(self, f: LoftFeature) -> None:
+        # CadQuery's loft consumes the current Workplane stack of wires —
+        # accumulate the sketches by .each() / .add() then call .loft().
+        merged = None
+        for sid in f.sketchIds:
+            sk = self.sketches.get(sid)
+            if sk is None:
+                raise TranspileError(f"loft '{f.id}' references unknown sketch '{sid}'")
+            merged = sk if merged is None else merged.add(sk)
+        if merged is None:
+            raise TranspileError(f"loft '{f.id}' has no resolvable sketches")
+        try:
+            result = merged.loft(ruled=f.ruled, combine=True)
+        except TypeError:
+            # Older CQ signatures don't accept 'ruled'; fall back.
+            result = merged.loft(combine=True)
+        self.solids[f.id] = result
+        self.last_id = f.id
+
+    # ── Sweep ──────────────────────────────────────────────────────────────
+    def _op_sweep(self, f: SweepFeature) -> None:
+        profile = self.sketches.get(f.profileSketchId)
+        path = self.sketches.get(f.pathSketchId)
+        if profile is None:
+            raise TranspileError(f"sweep '{f.id}' references unknown profile sketch '{f.profileSketchId}'")
+        if path is None:
+            raise TranspileError(f"sweep '{f.id}' references unknown path sketch '{f.pathSketchId}'")
+        result = profile.sweep(path, isFrenet=True, multisection=f.multisection)
         self.solids[f.id] = result
         self.last_id = f.id
 
