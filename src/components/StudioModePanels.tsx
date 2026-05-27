@@ -125,12 +125,34 @@ export const LibraryPanel: React.FC<{
                 <img src={h.thumbnailUrl} alt="" className="w-12 h-12 object-cover rounded bg-black/40 shrink-0" />
               )}
               <div className="flex-1 min-w-0">
-                <p className="text-[11px] font-bold text-white truncate">{h.title}</p>
+                {h.sourceUrl ? (
+                  <a href={h.sourceUrl} target="_blank" rel="noopener noreferrer"
+                     className="text-[11px] font-bold text-white hover:text-amber-300 underline-offset-2 hover:underline truncate block"
+                     title="Open source page in a new tab">
+                    {h.title}
+                  </a>
+                ) : (
+                  <p className="text-[11px] font-bold text-white truncate">{h.title}</p>
+                )}
                 <p className="text-[9px] text-white/40 truncate">{h.author ?? h.source}</p>
-                <div className="flex gap-1 mt-1">
+                <div className="flex flex-wrap gap-1 mt-1 items-center">
                   <span className="text-[9px] px-1 bg-emerald-500/20 text-emerald-300 rounded font-mono">{h.licenseSPDX}</span>
                   <span className="text-[9px] px-1 bg-white/10 text-white/60 rounded font-mono uppercase">{h.format}</span>
                   <span className="text-[9px] px-1 bg-white/10 text-white/60 rounded font-mono">{h.kind}</span>
+                  {h.sourceUrl && (
+                    <a href={h.sourceUrl} target="_blank" rel="noopener noreferrer"
+                       className="text-[9px] px-1 bg-blue-500/20 text-blue-300 rounded hover:bg-blue-500/30 font-mono flex items-center gap-0.5"
+                       title="Open source page">
+                      <ExternalLink className="w-2.5 h-2.5" /> source
+                    </a>
+                  )}
+                  {h.downloadUrl && h.downloadUrl !== h.sourceUrl && (
+                    <a href={h.downloadUrl} target="_blank" rel="noopener noreferrer"
+                       className="text-[9px] px-1 bg-purple-500/20 text-purple-300 rounded hover:bg-purple-500/30 font-mono"
+                       title="Direct file URL">
+                      file
+                    </a>
+                  )}
                 </div>
               </div>
               <div className="flex flex-col gap-1 shrink-0">
@@ -138,16 +160,10 @@ export const LibraryPanel: React.FC<{
                   onClick={() => handleImport(h)}
                   disabled={busyId === h.sourceId}
                   className="px-2 py-0.5 bg-amber-500/20 text-amber-300 text-[10px] rounded hover:bg-amber-500/30 disabled:opacity-50"
-                  title="Validate and import as project base"
+                  title="Validate and load into the 3D viewport"
                 >
-                  {busyId === h.sourceId ? '…' : 'Use'}
+                  {busyId === h.sourceId ? '…' : 'Load'}
                 </button>
-                {h.sourceUrl && (
-                  <a href={h.sourceUrl} target="_blank" rel="noopener noreferrer"
-                     className="px-2 py-0.5 text-white/30 hover:text-white text-[10px] text-center">
-                    <ExternalLink className="w-3 h-3 inline" />
-                  </a>
-                )}
               </div>
             </div>
           </div>

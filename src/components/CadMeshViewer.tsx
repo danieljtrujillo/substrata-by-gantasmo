@@ -2,9 +2,10 @@ import React, { useEffect, useMemo, useState } from 'react';
 import * as THREE from 'three';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 
 export interface CadMeshArtifact {
-  kind: 'step' | 'stl' | 'glb' | 'obj' | 'openscad' | 'cadquery_py' | 'source';
+  kind: 'step' | 'stl' | 'glb' | 'gltf' | 'obj' | 'openscad' | 'cadquery_py' | 'source';
   url?: string;
 }
 
@@ -23,7 +24,9 @@ interface LoadedMesh {
 function pickArtifact(artifacts: CadMeshArtifact[]): CadMeshArtifact | null {
   return (
     artifacts.find(a => a.kind === 'glb' && a.url)
+    ?? artifacts.find(a => a.kind === 'gltf' && a.url)
     ?? artifacts.find(a => a.kind === 'stl' && a.url)
+    ?? artifacts.find(a => a.kind === 'obj' && a.url)
     ?? null
   );
 }
@@ -63,6 +66,34 @@ async function loadGlb(url: string): Promise<LoadedMesh> {
   };
 }
 
+async function loadObj(url: string, color: string): Promise<LoadedMesh> {
+  const loader = new OBJLoader();
+  const group = await loader.loadAsync(url);
+  group.traverse(obj => {
+    const mesh = obj as THREE.Mesh;
+    if (mesh.isMesh) {
+      mesh.material = new THREE.MeshPhysicalMaterial({
+        color, metalness: 0.4, roughness: 0.35, clearcoat: 0.4, clearcoatRoughness: 0.15,
+      });
+      if (mesh.geometry && !mesh.geometry.attributes.normal) {
+        mesh.geometry.computeVertexNormals();
+      }
+    }
+  });
+  return {
+    scene: group,
+    dispose: () => {
+      group.traverse(obj => {
+        const mesh = obj as THREE.Mesh;
+        if (mesh.geometry) mesh.geometry.dispose();
+        const material = mesh.material as THREE.Material | THREE.Material[];
+        if (Array.isArray(material)) material.forEach(m => m.dispose());
+        else if (material) material.dispose();
+      });
+    },
+  };
+}
+
 function fitToBox(object: THREE.Object3D, targetSize: number): void {
   const box = new THREE.Box3().setFromObject(object);
   const size = box.getSize(new THREE.Vector3());
@@ -84,7 +115,10 @@ export const CadMeshViewer: React.FC<Props> = ({
     let cancelled = false;
     if (!artifact?.url) { setLoaded(null); return; }
     setError(null);
-    const loader = artifact.kind === 'glb' ? loadGlb(artifact.url) : loadStl(artifact.url, color);
+    const loader =
+      artifact.kind === 'glb' || artifact.kind === 'gltf' ? loadGlb(artifact.url) :
+      artifact.kind === 'obj' ? loadObj(artifact.url, color) :
+      loadStl(artifact.url, color);
     loader.then(result => {
       if (cancelled) { result.dispose(); return; }
       fitToBox(result.scene, targetSize);

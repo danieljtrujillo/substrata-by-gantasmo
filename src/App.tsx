@@ -836,7 +836,7 @@ interface Part {
 }
 
 interface CadArtifactRef {
-  kind: 'step' | 'stl' | 'glb' | 'obj' | 'openscad' | 'cadquery_py' | 'source';
+  kind: 'step' | 'stl' | 'glb' | 'gltf' | 'obj' | 'openscad' | 'cadquery_py' | 'source';
   url?: string;
   bytes?: number;
 }
@@ -2659,9 +2659,46 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
             {showAssetLibrary && (
               <AssetLibraryPanel
                 onClose={() => setShowAssetLibrary(false)}
-                onUseAsBase={(asset) => {
+                onUseAsBase={(asset, buffer) => {
                   setImportedAssets(prev => [...prev, asset]);
-                  toast.success(`Imported ${asset.hit.title} from ${asset.hit.source}`);
+                  const fmt = asset.hit.format;
+                  const meshKind = fmt === 'glb' ? 'glb' : fmt === 'gltf' ? 'gltf' : fmt === 'stl' ? 'stl' : fmt === 'obj' ? 'obj' : null;
+                  if (!meshKind) {
+                    toast.success(`Imported ${asset.hit.title} from ${asset.hit.source} (${fmt} — preview not supported in viewport)`);
+                    return;
+                  }
+                  const mime = meshKind === 'glb' ? 'model/gltf-binary'
+                    : meshKind === 'gltf' ? 'model/gltf+json'
+                    : meshKind === 'stl' ? 'model/stl'
+                    : 'model/obj';
+                  const url = URL.createObjectURL(new Blob([buffer], { type: mime }));
+                  const artifact: CadArtifactRef = { kind: meshKind, url, bytes: buffer.byteLength };
+                  setProtoProject(prev => {
+                    const next: PrototypeProject = prev ?? {
+                      id: `import_${Date.now()}`,
+                      name: asset.hit.title || 'Imported asset',
+                      description: `Imported from ${asset.hit.source}: ${asset.hit.title}`,
+                      designNotes: asset.hit.attributionString ?? '',
+                      parts: [],
+                      openscadCode: `// Imported ${fmt.toUpperCase()} — see CAD viewport`,
+                      svgDesign: '',
+                      wiringDiagram: '',
+                      assemblySteps: [],
+                      code: '',
+                      printingFiles: [],
+                      communityRefs: [asset.hit.sourceUrl].filter(Boolean) as string[],
+                      status: 'ready',
+                      cadEngine: 'openscad',
+                      cadArtifacts: [artifact],
+                    };
+                    return {
+                      ...next,
+                      cadArtifacts: [...(next.cadArtifacts ?? []), artifact],
+                    };
+                  });
+                  setEngineeringMode('prototype');
+                  setActiveOutputTab('3d');
+                  toast.success(`Loaded ${asset.hit.title} into the 3D viewport`);
                 }}
               />
             )}

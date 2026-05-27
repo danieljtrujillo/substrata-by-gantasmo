@@ -34,9 +34,14 @@ export const onRequestGet: PagesFunction<Env> = async (ctx) => {
 
   // Bias query the same way the client used to — kept here so we never
   // forward an unfiltered query that would dredge up non-CC0 records.
+  // `online_visual_material:true` is the EDAN field that flags records
+  // with downloadable media. Without it, the upstream happily returns
+  // book/catalog metadata rows the client can't render — see prior
+  // "no results" symptom where 16k row counts produced 0 hits because
+  // every row lacked online_media.
   let q = userQuery;
   if (kind === '3d_model') q += ' AND online_media_type:"3D Images"';
-  q += ' AND unit_code:* AND metadata_usage:CC0';
+  q += ' AND unit_code:* AND metadata_usage:CC0 AND online_visual_material:true';
 
   const upstream = `${BASE}/search?api_key=${ctx.env.SMITHSONIAN_API_KEY}&q=${encodeURIComponent(q)}&start=${cursor}&rows=${limit}`;
 
