@@ -418,9 +418,15 @@ RULES:
 10. PARSE USER CONSTRAINTS LITERALLY. If the user says "no X", "without X", "I don't want X", treat it as an absolute ban. Do NOT suggest X. Do NOT route around it ("you could use a Y which is similar to X"). If a constraint makes the project impossible, say so explicitly and ask for a relaxation rather than silently ignoring it.`;
 
 export async function consultLaserExpert(query: string, history: any[] = [], useThinking: boolean = false, imageBase64?: string) {
-  const modelName = useThinking ? "gemini-3.1-pro-preview" : "gemini-3-flash-preview";
-  
+  // Centralised model routing — no inline string literals. Deep-think uses
+  // the pro tier; everything else routes to the policy-compliant flash. The
+  // relay's modelPolicy.ts upgrades any legacy ids to current floor anyway,
+  // but keeping this consistent at the source avoids spurious 400s and makes
+  // the call-site easy to audit.
+  const modelName = useThinking ? MODELS.pro : MODELS.flash;
+
   // Build user parts with optional image
+
   const userParts: any[] = [];
   if (imageBase64) {
     userParts.push({ inlineData: { data: dataUrlToB64(imageBase64), mimeType: 'image/png' } });
@@ -493,9 +499,10 @@ export async function synthesizeImageEdition(
     imageBase64?: string, 
     maskBase64?: string
 ) {
-    const model = "gemini-3.1-flash-image-preview";
-    
+    const model = MODELS.flashImage;
+
     let systemInstruction = "";
+
     if (mode === 'inpaint') {
         systemInstruction = "You are an expert image inpainter. Modify the original image only in the masked area according to the prompt.";
     } else if (mode === 'outpaint') {
@@ -782,6 +789,9 @@ Return exactly as JSON.`;
   let result = JSON.parse(getResponseText(response));
   let findings = validateCompliance(constraintSet, {
     openscadCode: result.openscadCode,
+    svgDesign: result.svgDesign,
+    firmwareCode: result.code,
+    parts: result.parts,
     designNotes: result.designNotes,
     materialSchedule: undefined,
     wiringDiagram: result.wiringDiagram,
@@ -794,6 +804,9 @@ Return exactly as JSON.`;
     result = JSON.parse(getResponseText(response));
     findings = validateCompliance(constraintSet, {
       openscadCode: result.openscadCode,
+      svgDesign: result.svgDesign,
+      firmwareCode: result.code,
+      parts: result.parts,
       designNotes: result.designNotes,
       materialSchedule: undefined,
       wiringDiagram: result.wiringDiagram,

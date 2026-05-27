@@ -1,11 +1,23 @@
 // Scraper → validator → cache pipeline.
 // Every fetched asset goes through meshValidator before it's added to the
 // local index, so we never index a corrupt/mismatched file.
+//
+// IMPORTANT — side-effect imports below register every shipped adapter with
+// the registry. The UI sometimes imports `searchLibrary` directly from this
+// module (not from the `./index` barrel), so without these imports the
+// registry stays empty and every search silently returns zero hits. That
+// produced the "No results — try a broader query" false negative.
 
 import type { AssetHit, FetchedAsset, SearchFilters, SpdxLicense } from './types';
 import { isPermissive, PERMISSIVE_LICENSES } from './types';
-import { getAdapter, searchAll } from './registry';
+import { getAdapter, searchAll, listAdapters } from './registry';
 import { generateValidationReport, type ValidationReport } from '../meshValidator';
+
+// Adapter side-effect registration — keep at module top so any import of
+// this file pulls them in. Do NOT remove without auditing callers.
+import './smithsonian';
+import './locHabs';
+
 
 export interface IndexedAsset {
   hit: AssetHit;
@@ -35,13 +47,38 @@ export function filterByLicense(
   return hits.filter(h => set.has(h.licenseSPDX));
 }
 
-/** Top-level cross-source search, license-gated. */
+/** UI-facing error type that lets the caller distinguish empty results from
+ * a misconfigured/unavailable backend. */
+export class LibraryUnavailableError extends Error {
+  constructor(message: string, readonly code: 'no_adapters' | 'all_failed') {
+    super(message);
+    this.name = 'LibraryUnavailableError';
+  }
+}
+
+/** Top-level cross-source search, license-gated.
+ *
+ * Throws `LibraryUnavailableError` when no adapters are registered at all —
+ * the UI uses this to show a "search unavailable" state instead of the
+ * misleading "no results" toast. Empty result arrays still mean "search ran,
+ * nothing matched".
+ */
 export async function searchLibrary(filters: SearchFilters): Promise<AssetHit[]> {
+  if (listAdapters().length === 0) {
+    // Should be impossible given the side-effect imports at top of file,
+    // but if it ever happens we surface a real error instead of pretending
+    // the user just had a bad query.
+    throw new LibraryUnavailableError(
+      'No scraper adapters registered — library search is unavailable',
+      'no_adapters',
+    );
+  }
   const allowed = filters.allowedLicenses ?? PERMISSIVE_LICENSES;
   const filteredFilters: SearchFilters = { ...filters, allowedLicenses: allowed };
   const hits = await searchAll(filteredFilters);
   return filterByLicense(hits, allowed);
 }
+
 
 /**
  * Fetch a single hit, validate, and produce an IndexedAsset suitable for

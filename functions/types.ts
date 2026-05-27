@@ -32,7 +32,22 @@ export interface Env {
    * Required whenever CAD_WORKER_URL is set.
    */
   CAD_WORKER_SECRET?: string;
+  /**
+   * Optional OpenRouter API key. When present, /api/ai/relay will accept
+   * `provider: "openrouter"` in the request body and forward to OpenRouter
+   * (used for alternative reasoning models e.g. Claude). When absent, any
+   * non-Gemini provider request returns 400 provider_unavailable.
+   */
+  OPENROUTER_API_KEY?: string;
+  /**
+   * Optional Anthropic API key. When present, /api/ai/relay will accept
+   * `provider: "anthropic"` in the request body and forward directly to
+   * Anthropic's Messages API. When absent, Anthropic provider requests
+   * return 400 provider_unavailable.
+   */
+  ANTHROPIC_API_KEY?: string;
 }
+
 
 export interface JWTPayload {
   sub: string;       // Google user ID

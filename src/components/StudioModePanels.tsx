@@ -11,8 +11,9 @@ import {
   Cpu, FileCode, ExternalLink, Zap, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { searchLibrary, ingestHit, type IndexedAsset } from '../lib/scraper/ingest';
+import { searchLibrary, ingestHit, LibraryUnavailableError, type IndexedAsset } from '../lib/scraper/ingest';
 import type { AssetHit, AssetKind } from '../lib/scraper/types';
+
 import { generatePCBSchematic, type PCBSchematicResult } from '../services/geminiService';
 import { emitProjectFiles } from '../lib/kicadEmit';
 import { buildBom } from '../lib/circuitGraph';
@@ -25,20 +26,46 @@ import {
 } from '../lib/electricalPlan';
 
 // ── Library Panel ──────────────────────────────────────────────────────────
+//
+// Supports two rendering modes:
+//
+//   - default (overlay): an absolute-positioned floating card in the top-left
+//     of the viewport. Used when invoked as a standalone studio-mode panel.
+//   - embedded: removes the absolute positioning + outer chrome so the same
+//     UI can live inside the unified Library drawer (Templates + Public
+//     Assets in one place). This is how App.tsx renders it now.
+//
+// Keeping both modes in one component avoids drift between the two surfaces.
 
 export const LibraryPanel: React.FC<{
   onClose: () => void;
   onUseAsBase?: (asset: IndexedAsset, buffer: ArrayBuffer) => void;
-}> = ({ onClose, onUseAsBase }) => {
+  /** When true, render without the absolute-positioned wrapper / header — for
+   *  use inside the unified Library drawer in App.tsx. */
+  embedded?: boolean;
+}> = ({ onClose, onUseAsBase, embedded = false }) => {
+
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState<AssetKind | 'any'>('any');
   const [hits, setHits] = useState<AssetHit[]>([]);
   const [searching, setSearching] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
 
+  // `searched` tracks whether we've actually completed at least one search,
+  // so the empty-state copy can change from "search public-domain sources"
+  // (initial) to "no matches" (after a real search ran).
+  const [searched, setSearched] = useState(false);
+  // When the backend itself is misconfigured (no adapters registered, or every
+  // adapter threw — e.g. the Smithsonian endpoint returns 503 because
+  // SMITHSONIAN_API_KEY isn't bound) we set this so the UI can show a
+  // distinct "search unavailable" message instead of pretending the user just
+  // had a bad query.
+  const [searchUnavailable, setSearchUnavailable] = useState<string | null>(null);
+
   const runSearch = useCallback(async () => {
     if (!query.trim()) return;
     setSearching(true);
+    setSearchUnavailable(null);
     try {
       const results = await searchLibrary({
         query: query.trim(),
@@ -46,13 +73,23 @@ export const LibraryPanel: React.FC<{
         limit: 30,
       });
       setHits(results);
-      if (results.length === 0) toast.info('No results — try a broader query');
+      setSearched(true);
+      if (results.length === 0) {
+        toast.info('No matches for that query — try different keywords');
+      }
     } catch (err: any) {
-      toast.error(`Search failed: ${err?.message ?? err}`);
+      if (err instanceof LibraryUnavailableError) {
+        setSearchUnavailable(err.message);
+        setHits([]);
+        toast.error('Library search is unavailable — see panel for details');
+      } else {
+        toast.error(`Search failed: ${err?.message ?? err}`);
+      }
     } finally {
       setSearching(false);
     }
   }, [query, kind]);
+
 
   const handleImport = useCallback(async (hit: AssetHit) => {
     setBusyId(hit.sourceId);
@@ -71,17 +108,12 @@ export const LibraryPanel: React.FC<{
     }
   }, [onUseAsBase]);
 
-  return (
-    <div className="absolute top-4 left-4 w-105 max-h-[80%] overflow-hidden flex flex-col bg-black/95 backdrop-blur-md border border-white/10 rounded-xl z-20">
-      <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-white/10">
-        <div className="flex items-center gap-2">
-          <Search className="w-4 h-4 text-amber-400" />
-          <span className="text-xs font-bold uppercase tracking-widest text-white/80">Library</span>
-        </div>
-        <button onClick={onClose} className="text-white/30 hover:text-white"><X className="w-4 h-4" /></button>
-      </div>
+  // Shared inner content — search controls + result list. The outer chrome
+  // (positioning, header, close button) is conditional on `embedded`.
+  const inner = (
+    <>
+      <div className={embedded ? 'px-3 py-2 border-b border-white/10 space-y-2' : 'px-3 py-2 border-b border-white/10 space-y-2'}>
 
-      <div className="px-3 py-2 border-b border-white/10 space-y-2">
         <div className="flex gap-1">
           <input
             value={query}
@@ -112,12 +144,34 @@ export const LibraryPanel: React.FC<{
       </div>
 
       <div className="flex-1 overflow-y-auto p-2 space-y-1">
-        {hits.length === 0 && !searching && (
+        {/* Empty-state copy is split three ways:
+            1. before any search has run → invite the user to search
+            2. after a clean search returned zero rows → "no matches"
+            3. backend unavailable (no adapters / all adapters errored) →
+               explain the failure mode instead of blaming the query. */}
+        {hits.length === 0 && !searching && searchUnavailable && (
+          <div className="text-[10px] text-rose-300/80 text-center py-6 px-3 space-y-1">
+            <p className="font-bold uppercase tracking-widest">Search unavailable</p>
+            <p className="text-rose-300/60">{searchUnavailable}</p>
+            <p className="text-white/30 text-[9px]">
+              Check <span className="font-mono">SMITHSONIAN_API_KEY</span> /
+              adapter registration. The query itself is fine.
+            </p>
+          </div>
+        )}
+        {hits.length === 0 && !searching && !searchUnavailable && !searched && (
           <p className="text-[10px] text-white/30 text-center py-8">
             Search public-domain + CC0 sources<br />
             <span className="font-mono">Smithsonian · LOC HABS/HAER</span>
           </p>
         )}
+        {hits.length === 0 && !searching && !searchUnavailable && searched && (
+          <p className="text-[10px] text-white/30 text-center py-8">
+            No matches for that query.<br />
+            <span className="text-white/20">Try broader or different keywords.</span>
+          </p>
+        )}
+
         {hits.map(h => (
           <div key={h.sourceId} className="p-2 bg-white/5 rounded border border-white/5 hover:border-white/15 transition-colors">
             <div className="flex items-start gap-2">
@@ -169,11 +223,33 @@ export const LibraryPanel: React.FC<{
           </div>
         ))}
       </div>
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <div className="flex flex-col h-full min-h-100 bg-black/40 rounded-lg border border-white/10 overflow-hidden">
+        {inner}
+      </div>
+    );
+  }
+
+  return (
+    <div className="absolute top-4 left-4 w-105 max-h-[80%] overflow-hidden flex flex-col bg-black/95 backdrop-blur-md border border-white/10 rounded-xl z-20">
+      <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-white/10">
+        <div className="flex items-center gap-2">
+          <Search className="w-4 h-4 text-amber-400" />
+          <span className="text-xs font-bold uppercase tracking-widest text-white/80">Library</span>
+        </div>
+        <button onClick={onClose} className="text-white/30 hover:text-white"><X className="w-4 h-4" /></button>
+      </div>
+      {inner}
     </div>
   );
 };
 
 // ── Hacker (PCB) Panel ─────────────────────────────────────────────────────
+
 
 export const HackerPanel: React.FC<{
   onClose: () => void;

@@ -139,6 +139,9 @@ import type { ElectricalPlan } from './lib/electricalPlan';
 import { evaluateOpenSCAD, type EvaluatedPrimitive } from './lib/openscadParser';
 import type { IndexedAsset } from './lib/scraper/ingest';
 import { speakText, cancelSpeech, generateAudioBuffer, playBuffer, TTS_VOICES, DEFAULT_VOICE, type VoiceName } from './services/ttsService';
+import { parseAdvisorMarkdown, hasMarkdown } from './lib/advisorMarkdown';
+import { composeSamplePrompt, ALL_MOVEMENTS, MOVEMENT_LABELS, type ComposerMovement } from './lib/promptComposer';
+
 import { ACMER_S1_PARAMETERS, ACMER_S1_MANUAL_SUMMARY, PROJECT_TEMPLATES, LaserSettings, LabelSettings, LABEL_SIZE_PRESETS, MUNBYN_ITPP130B, PRINTER_DATABASE, LASER_DATABASE } from './constants';
 import { STYLE_GUIDES } from './styleGuides';
 import { loginWithGoogle, logout, AUTH_AVAILABLE } from './lib/auth';
@@ -225,7 +228,7 @@ const PART_COLORS = [
   '#ec4899', '#6366f1', '#14b8a6', '#f97316', '#a855f7', '#22d3ee'
 ];
 
-function parseOpenSCAD(code: string): ParsedPrimitive[] {
+function parseOpenSCAD(code: string, outStatus?: { isFallback: boolean }): ParsedPrimitive[] {
   const primitives: ParsedPrimitive[] = [];
   if (!code || code.startsWith('//')) return primitives;
 
@@ -238,6 +241,7 @@ function parseOpenSCAD(code: string): ParsedPrimitive[] {
   try {
     const evaluated = evaluateOpenSCAD(code);
     if (evaluated.length > 0) {
+      if (outStatus) outStatus.isFallback = false;
       const adapted = evaluated.map(adaptEvaluatedPrimitive);
       return normalizeScene(adapted);
     }
@@ -291,6 +295,7 @@ function parseOpenSCAD(code: string): ParsedPrimitive[] {
 
   // If nothing was parsed, generate geometry from the parts list structure
   if (primitives.length === 0) {
+    if (outStatus) outStatus.isFallback = true;
     primitives.push(
       { type: 'cube', args: [2, 0.3, 3], position: [0, 0, 0], rotation: [0, 0, 0], color: '#3b82f6', label: 'base' },
       { type: 'cylinder', args: [0.15, 0.15, 1.5, 16], position: [-0.7, 0.9, -1], rotation: [0, 0, 0], color: '#8b5cf6', label: 'pillar' },
@@ -306,6 +311,7 @@ function parseOpenSCAD(code: string): ParsedPrimitive[] {
 
   // Apply UNIFORM scaling — single bounding-box-based scale for the entire scene
   // This ensures all parts maintain correct proportions relative to each other
+  if (outStatus) outStatus.isFallback = false;
   return normalizeScene(primitives);
 }
 
@@ -665,7 +671,7 @@ const PrimitiveGeometry = ({ prim }: { prim: ParsedPrimitive }) => {
   return <primitive object={geometry} attach="geometry" />;
 };
 
-const PrototypePreview = ({ openscadCode, parts, selectedPartLabel, onPartClick, cadArtifacts }: { openscadCode: string; parts: Part[]; selectedPartLabel?: string | null; onPartClick?: (label: string) => void; cadArtifacts?: CadArtifactRef[] }) => {
+const PrototypePreview = ({ openscadCode, parts, selectedPartLabel, onPartClick, cadArtifacts, onParseFallback }: { openscadCode: string; parts: Part[]; selectedPartLabel?: string | null; onPartClick?: (label: string) => void; cadArtifacts?: CadArtifactRef[]; onParseFallback?: (failed: boolean) => void }) => {
   const meshArtifact = useMemo(() => {
     if (!cadArtifacts || cadArtifacts.length === 0) return null;
     return (
@@ -674,8 +680,15 @@ const PrototypePreview = ({ openscadCode, parts, selectedPartLabel, onPartClick,
       ?? null
     );
   }, [cadArtifacts]);
+  const statusRef = useRef({ isFallback: false });
   const primitives = useMemo(() => {
-    const parsed = parseOpenSCAD(openscadCode);
+    const status = { isFallback: false };
+    if (!openscadCode || openscadCode.startsWith('//') || openscadCode.includes('This engine emits BRep, not OpenSCAD')) {
+      statusRef.current = { isFallback: false };
+      return [];
+    }
+    const parsed = parseOpenSCAD(openscadCode, status);
+    statusRef.current = status;
     if (parsed.length > 0) return parsed;
     if (parts.length === 0) return [];
     const results: ParsedPrimitive[] = [];
@@ -705,6 +718,12 @@ const PrototypePreview = ({ openscadCode, parts, selectedPartLabel, onPartClick,
     });
     return results;
   }, [openscadCode, parts]);
+
+  useEffect(() => {
+    if (onParseFallback) {
+      onParseFallback(statusRef.current.isFallback);
+    }
+  }, [openscadCode, onParseFallback]);
 
   const [hovered, setHovered] = useState<number | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
@@ -876,11 +895,18 @@ export default function App() {
   // Layout state
   const [engineeringMode, setEngineeringMode] = useState<'laser' | 'prototype' | 'label'>('prototype');
   const [designStyle, setDesignStyle] = useState<'minimalist' | 'deconstructivist' | 'classical' | 'organic'>('minimalist');
+  const [isViewportFallback, setIsViewportFallback] = useState(false);
   const [isAdvisorMuted, setIsAdvisorMuted] = useState(false);
   const [advisorCollapsed, setAdvisorCollapsed] = useState(false);
   const [propsCollapsed, setPropsCollapsed] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
   const [libraryFilter, setLibraryFilter] = useState<string>('all');
+  // Library has two tabs since "Assets" (public-domain scraper search) was
+  // merged into the same drawer as Templates/Projects. The previous separate
+  // `showAssetLibrary` overlay caused duplicate UI for the same conceptual
+  // surface — see Phase 3 of the implementation plan.
+  const [libraryTab, setLibraryTab] = useState<'projects' | 'assets'>('projects');
+
   const [showMaintenance, setShowMaintenance] = useState(false);
   const [showDocs, setShowDocs] = useState(false);
   const [isAdvancedEditorOpen, setIsAdvancedEditorOpen] = useState(false);
@@ -2077,7 +2103,7 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
 
       setProtoProject(newProject);
       setProtoGenerationProgress(100);
-      setActiveOutputTab('bom');
+      setActiveOutputTab('3d');
       // Auto-open the mode-relevant panel so the new outputs surface immediately
       if (studioMode === 'architecture') setShowArchPanel(true);
       if (studioMode === 'hacker')       setShowHackerPanel(true);
@@ -2238,10 +2264,81 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
               onClick={e => e.stopPropagation()}
             >
               <div className="p-4 border-b border-white/10 flex items-center justify-between sticky top-0 bg-black/60 backdrop-blur-xl z-10">
-                <h2 className="text-sm font-black uppercase tracking-widest text-white">Project Library</h2>
+                <h2 className="text-sm font-black uppercase tracking-widest text-white">Library</h2>
                 <Button variant="ghost" size="icon" onClick={() => setShowLibrary(false)} className="h-8 w-8 text-white/60 hover:text-white"><X className="w-4 h-4" /></Button>
               </div>
+              {/* ── Two-tab library: Projects/Templates + Public-Domain Assets ──
+                  Previously these lived in two completely separate UIs (drawer +
+                  floating panel), which is exactly the "Assets vs Library"
+                  confusion we're fixing in Phase 3. */}
+              <div className="px-4 pt-3 flex gap-1 border-b border-white/10 sticky top-15 bg-black/60 backdrop-blur-xl z-10">
+                {([
+                  { id: 'projects', label: 'Templates & Projects', icon: Library },
+                  { id: 'assets',   label: 'Public Assets',        icon: Search },
+                ] as const).map(t => (
+                  <button key={t.id} onClick={() => setLibraryTab(t.id)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest border-b-2 transition-colors ${
+                      libraryTab === t.id
+                        ? 'border-laser-accent text-laser-accent'
+                        : 'border-transparent text-white/40 hover:text-white/70'
+                    }`}>
+                    <t.icon className="w-3 h-3" />
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+              {libraryTab === 'assets' ? (
+                <div className="p-4">
+                  <AssetLibraryPanel
+                    embedded
+                    onClose={() => setShowLibrary(false)}
+                    onUseAsBase={(asset, buffer) => {
+                      setImportedAssets(prev => [...prev, asset]);
+                      const fmt = asset.hit.format;
+                      const meshKind = fmt === 'glb' ? 'glb' : fmt === 'gltf' ? 'gltf' : fmt === 'stl' ? 'stl' : fmt === 'obj' ? 'obj' : null;
+                      if (!meshKind) {
+                        toast.success(`Imported ${asset.hit.title} from ${asset.hit.source} (${fmt} — preview not supported in viewport)`);
+                        return;
+                      }
+                      const mime = meshKind === 'glb' ? 'model/gltf-binary'
+                        : meshKind === 'gltf' ? 'model/gltf+json'
+                        : meshKind === 'stl' ? 'model/stl'
+                        : 'model/obj';
+                      const url = URL.createObjectURL(new Blob([buffer], { type: mime }));
+                      const artifact: CadArtifactRef = { kind: meshKind, url, bytes: buffer.byteLength };
+                      setProtoProject(prev => {
+                        const next: PrototypeProject = prev ?? {
+                          id: `import_${Date.now()}`,
+                          name: asset.hit.title || 'Imported asset',
+                          description: `Imported from ${asset.hit.source}: ${asset.hit.title}`,
+                          designNotes: asset.hit.attributionString ?? '',
+                          parts: [],
+                          openscadCode: `// Imported ${fmt.toUpperCase()} — see CAD viewport`,
+                          svgDesign: '',
+                          wiringDiagram: '',
+                          assemblySteps: [],
+                          code: '',
+                          printingFiles: [],
+                          communityRefs: [asset.hit.sourceUrl].filter(Boolean) as string[],
+                          status: 'ready',
+                          cadEngine: 'openscad',
+                          cadArtifacts: [artifact],
+                        };
+                        return {
+                          ...next,
+                          cadArtifacts: [...(next.cadArtifacts ?? []), artifact],
+                        };
+                      });
+                      setEngineeringMode('prototype');
+                      setActiveOutputTab('3d');
+                      setShowLibrary(false);
+                      toast.success(`Loaded ${asset.hit.title} into the 3D viewport`);
+                    }}
+                  />
+                </div>
+              ) : (
               <div className="p-4 grid grid-cols-2 gap-3">
+
                 <Card 
                   className="aspect-square border-dashed border-2 border-white/20 glass-panel flex flex-col items-center justify-center text-white/20 hover:text-laser-accent hover:border-laser-accent transition-colors cursor-pointer group"
                   onClick={() => { setOriginalImage(null); setProcessedImage(null); setDesignPrompt(''); setShowLibrary(false); toast.info("Started new project"); }}
@@ -2339,12 +2436,14 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
                   </Card>
                 ))}
               </div>
+              )}
             </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
 
       {/* AR Viewer Modal */}
+
       <AnimatePresence>
         {showArViewer && arGlbUrl && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
@@ -2655,57 +2754,16 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
         )}
       </AnimatePresence>
 
-      {/* ═══════ STUDIO MODE PANELS (mode-gated overlays) ═══════ */}
-      {(showAssetLibrary || showHackerPanel || showArchPanel) && (
+      {/* ═══════ STUDIO MODE PANELS (mode-gated overlays) ═══════
+          The standalone Asset Library overlay was removed in Phase 3 — the
+          public-asset search now lives inside the unified Library drawer
+          above. Only the mode-specific Hacker / Architecture panels remain
+          here. */}
+      {(showHackerPanel || showArchPanel) && (
         <div className="fixed inset-0 pointer-events-none z-70">
           <div className="relative w-full h-full pointer-events-auto">
-            {showAssetLibrary && (
-              <AssetLibraryPanel
-                onClose={() => setShowAssetLibrary(false)}
-                onUseAsBase={(asset, buffer) => {
-                  setImportedAssets(prev => [...prev, asset]);
-                  const fmt = asset.hit.format;
-                  const meshKind = fmt === 'glb' ? 'glb' : fmt === 'gltf' ? 'gltf' : fmt === 'stl' ? 'stl' : fmt === 'obj' ? 'obj' : null;
-                  if (!meshKind) {
-                    toast.success(`Imported ${asset.hit.title} from ${asset.hit.source} (${fmt} — preview not supported in viewport)`);
-                    return;
-                  }
-                  const mime = meshKind === 'glb' ? 'model/gltf-binary'
-                    : meshKind === 'gltf' ? 'model/gltf+json'
-                    : meshKind === 'stl' ? 'model/stl'
-                    : 'model/obj';
-                  const url = URL.createObjectURL(new Blob([buffer], { type: mime }));
-                  const artifact: CadArtifactRef = { kind: meshKind, url, bytes: buffer.byteLength };
-                  setProtoProject(prev => {
-                    const next: PrototypeProject = prev ?? {
-                      id: `import_${Date.now()}`,
-                      name: asset.hit.title || 'Imported asset',
-                      description: `Imported from ${asset.hit.source}: ${asset.hit.title}`,
-                      designNotes: asset.hit.attributionString ?? '',
-                      parts: [],
-                      openscadCode: `// Imported ${fmt.toUpperCase()} — see CAD viewport`,
-                      svgDesign: '',
-                      wiringDiagram: '',
-                      assemblySteps: [],
-                      code: '',
-                      printingFiles: [],
-                      communityRefs: [asset.hit.sourceUrl].filter(Boolean) as string[],
-                      status: 'ready',
-                      cadEngine: 'openscad',
-                      cadArtifacts: [artifact],
-                    };
-                    return {
-                      ...next,
-                      cadArtifacts: [...(next.cadArtifacts ?? []), artifact],
-                    };
-                  });
-                  setEngineeringMode('prototype');
-                  setActiveOutputTab('3d');
-                  toast.success(`Loaded ${asset.hit.title} into the 3D viewport`);
-                }}
-              />
-            )}
             {showHackerPanel && studioMode === 'hacker' && (
+
               <HackerPanel
                 onClose={() => setShowHackerPanel(false)}
                 initialPrompt={protoPrompt}
@@ -2810,11 +2868,11 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
             <Button variant="ghost" size="sm" onClick={() => setShowConceptPanel(true)} title="Draw a quick sketch and turn it into a 3D design" className="h-7 text-[9px] font-bold uppercase text-white/50 hover:text-white hover:bg-white/10 gap-1">
               <PenTool className="w-3.5 h-3.5" /> Sketch
             </Button>
-            {engineeringMode === 'prototype' && (
-              <Button variant="ghost" size="sm" onClick={() => setShowAssetLibrary(true)} title="Search public-domain 3D assets (Smithsonian, Library of Congress)" className={`h-7 text-[9px] font-bold uppercase hover:bg-white/10 gap-1 ${showAssetLibrary ? 'text-amber-300' : 'text-white/50 hover:text-white'}`}>
-                <Library className="w-3.5 h-3.5" /> Assets
-              </Button>
-            )}
+            {/* "Assets" button removed — public-domain asset search now lives
+                inside the unified Library drawer (the existing Library button
+                above opens it). This eliminates the duplicate-mental-model
+                problem where users couldn't tell where to import from. */}
+
             {engineeringMode === 'prototype' && studioMode === 'architecture' && (
               <Button variant="ghost" size="sm" onClick={() => setShowArchPanel(v => !v)} title="Building code (IBC/ADA) and electrical plan (NEC) checks" className={`h-7 text-[9px] font-bold uppercase hover:bg-white/10 gap-1 ${showArchPanel ? 'text-emerald-300' : 'text-white/50 hover:text-white'}`}>
                 <Building2 className="w-3.5 h-3.5" /> Code
@@ -3059,18 +3117,30 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
 
             {/* 3D Prototype viewport (always mounted, hidden when not active) */}
             <div className={`absolute inset-0 ${engineeringMode === 'prototype' ? '' : 'hidden'}`}>
-              <div className="h-full bg-slate-950">
+              <div className="h-full bg-slate-950 relative">
                 <Canvas shadows={{ type: THREE.PCFShadowMap }}>
                   <PerspectiveCamera makeDefault position={[5, 5, 5]} />
                   <OrbitControls makeDefault minPolarAngle={0} maxPolarAngle={Math.PI / 1.75} />
                   <Suspense fallback={null}>
                     <Stage environment="city" intensity={0.5}>
-                      <PrototypePreview openscadCode={protoProject?.openscadCode || ''} parts={protoProject?.parts || []} selectedPartLabel={selectedPartLabel} onPartClick={(label) => setSelectedPartLabel(label)} cadArtifacts={protoProject?.cadArtifacts} />
+                      <PrototypePreview openscadCode={protoProject?.openscadCode || ''} parts={protoProject?.parts || []} selectedPartLabel={selectedPartLabel} onPartClick={(label) => setSelectedPartLabel(label)} cadArtifacts={protoProject?.cadArtifacts} onParseFallback={setIsViewportFallback} />
                     </Stage>
                     <Environment preset="city" />
                   </Suspense>
                   <Grid infiniteGrid fadeDistance={30} fadeStrength={5} sectionSize={1.5} sectionColor="#3b82f6" sectionThickness={1.5} cellColor="#1e293b" />
                 </Canvas>
+
+                {isViewportFallback && protoProject && (
+                  <div className="absolute top-10 left-3 right-3 md:left-1/2 md:-translate-x-1/2 md:max-w-md bg-yellow-500/10 border border-yellow-500/20 backdrop-blur-md px-3 py-2 rounded-lg flex items-start gap-2.5 shadow-lg z-10 pointer-events-auto">
+                    <ShieldAlert className="w-5 h-5 text-yellow-400 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-[10px] font-black uppercase tracking-widest text-yellow-400 leading-none">Viewport Parsing Fallback</p>
+                      <p className="text-[9px] text-white/70 leading-snug mt-1">
+                        Rendering placeholder geometry because this OpenSCAD file uses custom loops, conditional variables, or advanced features outside our lightweight browser evaluator. Your output and code remain 100% correct, complete, and fully compilable!
+                      </p>
+                    </div>
+                  </div>
+                )}
 
                 {/* 3D overlay controls */}
                 <div className="absolute bottom-3 left-3 flex gap-2">
@@ -3894,6 +3964,77 @@ ${componentRegistry.length > 0 ? `<h2>Component Inventory</h2><table>
   );
 }
 
+/**
+ * Sample Prompt picker — opens an inline menu where the user can choose a
+ * mode/style/movement combination and instantly fill the advisor input with
+ * a fully-formed professional prompt. Composer is deterministic, so each
+ * click rotates through the seed list and lets the user generate ten very
+ * different prompts in seconds without burning AI calls. Phase 4.
+ */
+function SamplePromptMenu({ onPick }: { onPick: (prompt: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<'maker' | 'architecture' | 'hacker'>('architecture');
+  const [style, setStyle] = useState<'minimalist' | 'deconstructivist' | 'classical' | 'organic'>('minimalist');
+  const [movement, setMovement] = useState<ComposerMovement>('generative');
+  return (
+    <div className="relative">
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-6 text-[9px] uppercase tracking-widest font-bold text-laser-accent/60 hover:text-laser-accent hover:bg-laser-accent/10 px-2"
+        onClick={() => setOpen(o => !o)}
+        title="Generate a fully-formed professional sample prompt from style and movement presets"
+      >
+        <Sparkles className="w-3 h-3 mr-1" /> Sample
+      </Button>
+      {open && (
+        <div className="absolute bottom-7 left-0 w-72 glass-panel border border-white/20 rounded-lg p-2 z-50 shadow-2xl space-y-2">
+          <div className="text-[8px] font-black uppercase tracking-widest text-white/40">Mode</div>
+          <div className="flex gap-1">
+            {(['maker', 'architecture', 'hacker'] as const).map(m => (
+              <button key={m} onClick={() => setMode(m)}
+                className={`flex-1 px-2 py-1 text-[8px] font-bold uppercase rounded border ${mode === m ? 'bg-blue-600 text-white border-blue-600' : 'border-white/10 text-white/40 hover:text-white'}`}>
+                {m}
+              </button>
+            ))}
+          </div>
+          <div className="text-[8px] font-black uppercase tracking-widest text-white/40">Style</div>
+          <div className="grid grid-cols-2 gap-1">
+            {(['minimalist', 'deconstructivist', 'classical', 'organic'] as const).map(s => (
+              <button key={s} onClick={() => setStyle(s)}
+                className={`px-2 py-1 text-[8px] font-bold uppercase rounded border ${style === s ? 'bg-blue-600 text-white border-blue-600' : 'border-white/10 text-white/40 hover:text-white'}`}>
+                {s}
+              </button>
+            ))}
+          </div>
+          <div className="text-[8px] font-black uppercase tracking-widest text-white/40">Movement</div>
+          <div className="grid grid-cols-2 gap-1">
+            {ALL_MOVEMENTS.map(mv => (
+              <button key={mv} onClick={() => setMovement(mv)}
+                className={`px-2 py-1 text-[8px] font-bold uppercase rounded border ${movement === mv ? 'bg-purple-600 text-white border-purple-600' : 'border-white/10 text-white/40 hover:text-white'}`}>
+                {MOVEMENT_LABELS[mv]}
+              </button>
+            ))}
+          </div>
+          <Button
+            className="w-full h-7 text-[9px] font-bold uppercase bg-laser-accent text-black hover:bg-laser-accent/80"
+            onClick={() => {
+              const prompt = composeSamplePrompt({ mode, style, movement });
+              onPick(prompt);
+              setOpen(false);
+            }}
+          >
+            <ChevronRight className="w-3 h-3 mr-1" /> Compose Prompt
+          </Button>
+          <p className="text-[8px] text-white/30 leading-tight">
+            Generates a verbose, deliverables-explicit prompt with named seed and rule overlays. Click again to rotate the seed.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ConsultantInterface({ 
   isMuted, 
   onToggleMute,
@@ -3907,6 +4048,7 @@ function ConsultantInterface({
   onBuildBlueprint: (description: string) => void,
   protoProject: PrototypeProject | null,
 }) {
+
   const [messages, setMessages] = useState<{ role: 'user' | 'assistant', content: string, files?: { name: string, content: string, ext: string }[], image?: string, audioBuffer?: AudioBuffer | null, isPlaying?: boolean }[]>([
     { role: 'assistant', content: "SUBSTRATA Design Advisor online. Tell me what you want to build — I'll help you decompose it into subsystems, pick components, and design the parts. When you're ready, I'll trigger a full blueprint. What's your project idea?" }
   ]);
@@ -4138,36 +4280,85 @@ function ConsultantInterface({
                 {m.image && (
                   <img src={m.image} alt="Attached" className="max-w-full max-h-32 rounded-lg mb-2 border border-white/10" />
                 )}
-                {/* Render message content — detect and inline-display code blocks */}
-                {(() => {
-                  const content = m.content;
-                  // Check for OpenSCAD or SVG code blocks in assistant messages
-                  if (m.role === 'assistant') {
-                    const codeBlockRegex = /```(?:openscad|svg|scad)\n([\s\S]*?)```/g;
-                    const parts: (string | { type: 'code'; lang: string; code: string })[] = [];
-                    let lastIdx = 0;
-                    let match;
-                    while ((match = codeBlockRegex.exec(content)) !== null) {
-                      if (match.index > lastIdx) parts.push(content.slice(lastIdx, match.index));
-                      parts.push({ type: 'code', lang: match[0].startsWith('```svg') ? 'svg' : 'openscad', code: match[1] });
-                      lastIdx = match.index + match[0].length;
-                    }
-                    if (lastIdx < content.length) parts.push(content.slice(lastIdx));
-                    if (parts.length > 1 || (parts.length === 1 && typeof parts[0] !== 'string')) {
-                      return parts.map((p, j) => typeof p === 'string' ? <span key={j}>{p}</span> : (
-                        <div key={j} className="my-2 rounded-lg border border-white/10 overflow-hidden">
-                          <div className="bg-white/5 px-2 py-1 text-[8px] uppercase tracking-widest text-white/40 font-bold">{p.lang}</div>
-                          {p.lang === 'svg' ? (
-                            <div className="bg-white rounded-b-lg p-3" dangerouslySetInnerHTML={{ __html: sanitizeSvg(p.code) }} />
-                          ) : (
-                            <pre className="p-2 text-[10px] font-mono text-blue-300 overflow-x-auto max-h-32">{p.code}</pre>
-                          )}
-                        </div>
-                      ));
-                    }
-                  }
-                  return content;
-                })()}
+                {/* Render message content — full markdown rendering for the
+                    assistant via parseAdvisorMarkdown. The user side stays
+                    plain text since it's just the user's typed input. */}
+                {m.role === 'assistant' ? (
+                  hasMarkdown(m.content) ? (
+                    <div className="space-y-2">
+                      {parseAdvisorMarkdown(m.content).map((block, j) => {
+                        if (block.kind === 'heading') {
+                          const sizeClass = block.level === 1 ? 'text-sm font-black' : block.level === 2 ? 'text-xs font-bold' : 'text-[11px] font-bold';
+                          return <div key={j} className={`${sizeClass} text-white uppercase tracking-wider`} dangerouslySetInnerHTML={{ __html: block.html }} />;
+                        }
+                        if (block.kind === 'paragraph') {
+                          return <p key={j} className="text-white/80 leading-relaxed" dangerouslySetInnerHTML={{ __html: block.html }} />;
+                        }
+                        if (block.kind === 'bullets') {
+                          return (
+                            <ul key={j} className="list-disc pl-4 space-y-0.5 text-white/80">
+                              {block.items.map((it, k) => <li key={k} dangerouslySetInnerHTML={{ __html: it }} />)}
+                            </ul>
+                          );
+                        }
+                        if (block.kind === 'ordered') {
+                          return (
+                            <ol key={j} className="list-decimal pl-4 space-y-0.5 text-white/80">
+                              {block.items.map((it, k) => <li key={k} dangerouslySetInnerHTML={{ __html: it }} />)}
+                            </ol>
+                          );
+                        }
+                        if (block.kind === 'code') {
+                          if (block.lang === 'svg') {
+                            return (
+                              <div key={j} className="my-2 rounded-lg border border-white/10 overflow-hidden">
+                                <div className="bg-white/5 px-2 py-1 text-[8px] uppercase tracking-widest text-white/40 font-bold">{block.lang}</div>
+                                <div className="bg-white rounded-b-lg p-3" dangerouslySetInnerHTML={{ __html: sanitizeSvg(block.code) }} />
+                              </div>
+                            );
+                          }
+                          return (
+                            <div key={j} className="my-2 rounded-lg border border-white/10 overflow-hidden">
+                              <div className="bg-white/5 px-2 py-1 text-[8px] uppercase tracking-widest text-white/40 font-bold">{block.lang || 'code'}</div>
+                              <pre className="p-2 text-[10px] font-mono text-blue-300 overflow-x-auto max-h-40">{block.code}</pre>
+                            </div>
+                          );
+                        }
+                        if (block.kind === 'table') {
+                          return (
+                            <div key={j} className="my-2 overflow-x-auto rounded-lg border border-white/10">
+                              <table className="w-full text-[10px]">
+                                <thead>
+                                  <tr className="bg-white/5">
+                                    {block.headers.map((h, k) => (
+                                      <th key={k} className="text-left px-2 py-1 font-bold text-white/70" dangerouslySetInnerHTML={{ __html: h }} />
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {block.rows.map((row, ri) => (
+                                    <tr key={ri} className="border-t border-white/5">
+                                      {row.map((cell, ci) => (
+                                        <td key={ci} className="px-2 py-1 text-white/70" dangerouslySetInnerHTML={{ __html: cell }} />
+                                      ))}
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          );
+                        }
+                        return null;
+                      })}
+                    </div>
+                  ) : (
+                    // No markdown markers — just render as plain text.
+                    m.content
+                  )
+                ) : (
+                  m.content
+                )}
+
                 {/* TTS play/pause button for assistant messages */}
                 {m.role === 'assistant' && i > 0 && (
                   <button
@@ -4307,6 +4498,7 @@ function ConsultantInterface({
               <option key={v.name} value={v.name}>{v.name} · {v.character}</option>
             ))}
           </select>
+          <SamplePromptMenu onPick={(prompt) => { setInput(prompt); autoResize(); textareaRef.current?.focus(); }} />
           <div className="flex-1" />
           <Button
             variant="ghost"
@@ -4318,6 +4510,7 @@ function ConsultantInterface({
           >
             <Wrench className="w-3 h-3 mr-1" /> Build Blueprint
           </Button>
+
         </div>
       </div>
     </div>

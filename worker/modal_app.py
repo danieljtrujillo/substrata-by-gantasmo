@@ -66,18 +66,31 @@ cadquery_image = (
 
 # pythonocc-core is conda-forge only (no PyPI wheel), so the Text2CAD image
 # uses Modal's micromamba builder for the OCC binding and pip for the rest.
+# Pip pins follow upstream Text2CAD's environment.yml where they matter
+# (torch, trimesh, torchinfo). Everything else floats forward.
 text2cad_image = (
     modal.Image.micromamba(python_version="3.10")
     .apt_install("git", "libgl1", "libglu1-mesa", "libxext6", "libxrender1", "libgomp1")
     .micromamba_install("pythonocc-core=7.7.2", channels=["conda-forge"])
     .pip_install(
         "torch==2.2.1",
-        "transformers>=4.41",
+        "transformers>=4.41,<5",
+        "accelerate>=0.27",
         "trimesh>=4.0",
         "open3d>=0.18",
         "pyvista>=0.43",
         "pydantic>=2.6",
         "huggingface_hub>=0.23",
+        "pyyaml>=6.0",
+        "loguru>=0.7",
+        "rich>=13.7",
+        "tqdm",
+        "prettytable",
+        "nltk",
+        "pillow",
+        "python-dotenv",
+        "torchinfo==1.8.0",
+        "plyfile",
     )
     .add_local_dir(_WORKER_DIR, "/app", copy=True)
     .workdir("/app")
