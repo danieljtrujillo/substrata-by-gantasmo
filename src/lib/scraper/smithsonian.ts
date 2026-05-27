@@ -17,26 +17,100 @@ import { sha256Hex } from './hash';
 import { registerAdapter } from './registry';
 
 function detectFormat(url: string): FileFormat | null {
-  const m = url.toLowerCase().match(/\.(stl|glb|gltf|obj|step|dxf|svg|jpg|jpeg|png|tiff?|pdf)(\?|$)/);
-  if (!m) return null;
-  const ext = m[1] === 'jpeg' ? 'jpg' : m[1] === 'tiff' ? 'tif' : m[1];
-  return ext as FileFormat;
+  // Strip query + fragment before extension match. Smithsonian's IDS
+  // delivery URLs put filenames in the `?id=...` query, which the previous
+  // regex missed entirely, returning null for every record.
+  const bare = url.toLowerCase().split(/[?#]/)[0];
+  const m = bare.match(/\.(stl|glb|gltf|obj|step|stp|dxf|svg|jpg|jpeg|png|tiff?|pdf)(\/|$)/);
+  if (m) {
+    const ext = m[1] === 'jpeg' ? 'jpg' : m[1] === 'tiff' ? 'tif' : m[1] === 'stp' ? 'step' : m[1];
+    return ext as FileFormat;
+  }
+  // Also probe the full URL for an extension inside the query string
+  // (e.g. `?id=NMNH-EO_..._001.jpg`) — IDS download endpoints do this.
+  const inQuery = url.toLowerCase().match(/\.(stl|glb|gltf|obj|step|stp|dxf|svg|jpg|jpeg|png|tiff?|pdf)(?:[&]|$)/);
+  if (inQuery) {
+    const ext = inQuery[1] === 'jpeg' ? 'jpg' : inQuery[1] === 'tiff' ? 'tif' : inQuery[1] === 'stp' ? 'step' : inQuery[1];
+    return ext as FileFormat;
+  }
+  return null;
+}
+
+const THREE_D_FORMATS: FileFormat[] = ['glb', 'gltf', 'stl', 'obj', 'step'];
+
+function pickFromResources(
+  resources: any[],
+  preferThreeD: boolean,
+): { url: string; format: FileFormat } | null {
+  if (!Array.isArray(resources)) return null;
+  if (preferThreeD) {
+    for (const r of resources) {
+      const url = typeof r?.url === 'string' ? r.url : undefined;
+      if (!url) continue;
+      const fmt = detectFormat(url);
+      if (fmt && THREE_D_FORMATS.includes(fmt)) return { url, format: fmt };
+    }
+  }
+  // Prefer "high-res" / "original" labels; deprioritise thumbnails + screens.
+  const scored = resources
+    .map(r => {
+      const url = typeof r?.url === 'string' ? r.url : null;
+      if (!url) return null;
+      const fmt = detectFormat(url);
+      if (!fmt) return null;
+      const label = String(r?.label ?? '').toLowerCase();
+      const lowUrl = url.toLowerCase();
+      const isThumb = /thumb|screen/.test(label) || /thumb|screen/.test(lowUrl);
+      const isHighRes = /high-res|full|original|master/.test(label);
+      return { url, format: fmt, rank: (isHighRes ? 0 : 1) + (isThumb ? 10 : 0) };
+    })
+    .filter((x): x is { url: string; format: FileFormat; rank: number } => !!x);
+  if (scored.length === 0) return null;
+  scored.sort((a, b) => a.rank - b.rank);
+  return { url: scored[0].url, format: scored[0].format };
 }
 
 function pickDownloadUrl(record: any): { url: string; format: FileFormat } | null {
   const media: any[] = record?.content?.descriptiveNonRepeating?.online_media?.media ?? [];
-  // Prefer 3D, then high-res image
-  const threeD = media.find(m => m?.type === '3d_package' || /\.(glb|gltf|stl|obj)/i.test(m?.content ?? ''));
-  if (threeD?.content) {
-    const fmt = detectFormat(threeD.content);
-    if (fmt) return { url: threeD.content, format: fmt };
-  }
+  if (media.length === 0) return null;
+
+  // Pass A — 3D-typed media. Drill into resources for the actual 3D file.
   for (const m of media) {
-    const url = m?.content;
-    if (typeof url !== 'string') continue;
-    const fmt = detectFormat(url);
-    if (fmt) return { url, format: fmt };
+    const type = String(m?.type ?? '').toLowerCase();
+    if (!/3d|3d_package|3-?d images/.test(type)) continue;
+    const fromRes = pickFromResources(m.resources, true);
+    if (fromRes) return fromRes;
+    if (typeof m?.content === 'string') {
+      const fmt = detectFormat(m.content);
+      if (fmt && THREE_D_FORMATS.includes(fmt)) return { url: m.content, format: fmt };
+    }
   }
+
+  // Pass B — image-typed media. Most EDAN image records ship their canonical
+  // delivery URL in `content` WITHOUT a file extension, but the `resources`
+  // array carries downloadable variants. Fall back to the canonical content
+  // URL with assumed jpg format if no resource gave us a clean answer (the
+  // IDS deliveryService returns JPEG by default).
+  for (const m of media) {
+    const type = String(m?.type ?? '').toLowerCase();
+    if (!/image/.test(type)) continue;
+    const fromRes = pickFromResources(m.resources, false);
+    if (fromRes) return fromRes;
+    if (typeof m?.content === 'string' && /ids\.si\.edu|edan\.si\.edu|collections\.si\.edu/.test(m.content)) {
+      return { url: m.content, format: 'jpg' };
+    }
+  }
+
+  // Pass C — anything else with a recognised extension anywhere.
+  for (const m of media) {
+    if (typeof m?.content === 'string') {
+      const fmt = detectFormat(m.content);
+      if (fmt) return { url: m.content, format: fmt };
+    }
+    const fromRes = pickFromResources(m.resources, false);
+    if (fromRes) return fromRes;
+  }
+
   return null;
 }
 
