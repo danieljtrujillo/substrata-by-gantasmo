@@ -39,8 +39,8 @@ const NEGATION_PATTERNS: RegExp[] = [
   /\bnot\s+([a-z][\w\s\-]{2,40}?)(?=[.,;!?\n]|$|\s+(?:and|or|but|with|except))/gi,
   // "without X"
   /\bwithout\s+([a-z][\w\s\-]{2,40}?)(?=[.,;!?\n]|$|\s+(?:and|or|but|with|except))/gi,
-  // "don't / do not use X"
-  /\b(?:don'?t|do\s+not|never)\s+(?:use|include|add|have|put|make)\s+([a-z][\w\s\-]{2,40}?)(?=[.,;!?\n]|$|\s+(?:and|or|but|with|except))/gi,
+  // "don't / do not use X" (extended verb list incl. want/like)
+  /\b(?:don'?t|do\s+not|never)\s+(?:use|include|add|have|put|make|want|like)\s+(?:any\s+|any\s+sort\s+of\s+|anything\s+)?([a-z][\w\s\-]{2,40}?)(?=[.,;!?\n]|$|\s+(?:and|or|but|with|except))/gi,
   // "avoid X"
   /\bavoid\s+([a-z][\w\s\-]{2,40}?)(?=[.,;!?\n]|$|\s+(?:and|or|but|with|except))/gi,
   // "exclude X"
@@ -56,8 +56,10 @@ const REQUIREMENT_PATTERNS: RegExp[] = [
   /\bneeds?\s+(?:to\s+have\s+)?([a-z][\w\s\-]{2,40}?)(?=[.,;!?\n]|$|\s+(?:and|or|but|with|except))/gi,
   // "required: X"
   /\brequired\s*:\s*([a-z][\w\s\-,]{2,80}?)(?=[.\n]|$)/gi,
-  // "only X" (rough; user says "only use plywood")
+  // "only X" (prefix form — "only use plywood")
   /\bonly\s+(?:use\s+)?([a-z][\w\s\-]{2,30}?)(?=[.,;!?\n]|$|\s+(?:and|or|but|with|except))/gi,
+  // "use X only" / "X only" (postfix form — "stepper motors only", "plywood only")
+  /\b(?:use\s+)?([a-z][\w\s\-]{2,40}?)\s+only(?=[.,;!?\n]|$)/gi,
 ];
 
 function normalise(s: string): string {
