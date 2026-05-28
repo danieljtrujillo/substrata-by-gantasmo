@@ -197,7 +197,7 @@ function Tip({ text, children, side = 'top' }: { text: string; children: React.R
     <span className="relative inline-flex" onMouseEnter={() => setShow(true)} onMouseLeave={() => setShow(false)}>
       {children}
       {show && (
-        <span className={`absolute z-200 pointer-events-none ${posClass} px-2 py-1 rounded-md bg-black/90 border border-white/10 text-[9px] text-white/80 font-medium whitespace-nowrap shadow-xl backdrop-blur-sm max-w-50 text-center leading-tight`}>
+        <span className={`absolute z-200 pointer-events-none ${posClass} px-2 py-1 rounded-md bg-black/90 border border-white/10 text-[9px] text-white/80 font-medium whitespace-normal break-words select-none shadow-xl backdrop-blur-sm max-w-[180px] text-center leading-tight`}>
           {text}
         </span>
       )}
@@ -3988,7 +3988,7 @@ function SamplePromptMenu({ onPick }: { onPick: (prompt: string) => void }) {
         <Sparkles className="w-3 h-3 mr-1" /> Sample
       </Button>
       {open && (
-        <div className="absolute bottom-7 left-0 w-72 glass-panel border border-white/20 rounded-lg p-2 z-50 shadow-2xl space-y-2">
+        <div className="absolute bottom-7 left-0 md:left-auto md:right-0 w-72 max-w-[calc(100vw-40px)] glass-panel border border-white/20 rounded-lg p-2 z-100 shadow-2xl space-y-2 pointer-events-auto">
           <div className="text-[8px] font-black uppercase tracking-widest text-white/40">Mode</div>
           <div className="flex gap-1">
             {(['maker', 'architecture', 'hacker'] as const).map(m => (

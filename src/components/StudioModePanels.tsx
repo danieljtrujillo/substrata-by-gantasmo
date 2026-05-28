@@ -235,7 +235,7 @@ export const LibraryPanel: React.FC<{
   }
 
   return (
-    <div className="absolute top-4 left-4 w-105 max-h-[80%] overflow-hidden flex flex-col bg-black/95 backdrop-blur-md border border-white/10 rounded-xl z-20">
+    <div className="absolute top-4 left-4 w-105 max-w-[calc(100vw-2rem)] max-h-[80%] overflow-hidden flex flex-col bg-black/95 backdrop-blur-md border border-white/10 rounded-xl z-20">
       <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-white/10">
         <div className="flex items-center gap-2">
           <Search className="w-4 h-4 text-amber-400" />
@@ -319,7 +319,7 @@ export const HackerPanel: React.FC<{
   const bom = useMemo(() => result ? buildBom(result.schematic) : [], [result]);
 
   return (
-    <div className="absolute top-4 left-4 w-110 max-h-[80%] overflow-hidden flex flex-col bg-black/95 backdrop-blur-md border border-amber-500/20 rounded-xl z-20">
+    <div className="absolute top-4 left-4 w-110 max-w-[calc(100vw-2rem)] max-h-[80%] overflow-hidden flex flex-col bg-black/95 backdrop-blur-md border border-amber-500/20 rounded-xl z-20">
       <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-white/10">
         <div className="flex items-center gap-2">
           <Cpu className="w-4 h-4 text-amber-400" />
@@ -449,7 +449,7 @@ export const ArchitecturePanel: React.FC<{
   }, [electricalPlan, onElectricalSvgChange]);
 
   return (
-    <div className="absolute top-4 left-4 w-110 max-h-[80%] overflow-hidden flex flex-col bg-black/95 backdrop-blur-md border border-emerald-500/20 rounded-xl z-20">
+    <div className="absolute top-4 left-4 w-110 max-w-[calc(100vw-2rem)] max-h-[80%] overflow-hidden flex flex-col bg-black/95 backdrop-blur-md border border-emerald-500/20 rounded-xl z-20">
       <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-white/10">
         <div className="flex items-center gap-2">
           <Building2 className="w-4 h-4 text-emerald-400" />
